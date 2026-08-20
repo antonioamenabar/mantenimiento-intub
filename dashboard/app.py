@@ -22,40 +22,34 @@ col1, col2 = st.columns(2)
 col3, col4 = st.columns(2)
 
 
+def _icono(valor):
+    if valor is None:
+        return "—"
+    return "✅" if valor else "❌"
+
+
 def render_inspecciones():
     st.header("🔍 Inspecciones")
+    st.caption("Semana actual — por cada día, si se hizo el checklist de Inicio y el de Fin de jornada (por separado).")
 
-    st.subheader("Cumplimiento diario (hoy)")
-    diario = queries.cumplimiento_diario(engine)
-    if diario.empty:
-        st.info("No hay camiones cargados en la flota todavía.")
-    else:
-        total = len(diario)
-        completos = diario["completo"].sum()
-        st.metric("Camiones con inspección completa hoy", f"{completos}/{total}")
-        st.dataframe(
-            diario.rename(columns={
-                "patente": "Patente", "alias": "Camión",
-                "inspeccion_inicio": "Inicio jornada", "inspeccion_fin": "Fin jornada",
-                "completo": "Completo",
-            }),
-            use_container_width=True, hide_index=True,
-        )
+    diaria = queries.matriz_cumplimiento_diario(engine)
+    semanal = queries.semanal_ultimas_semanas_cerradas(engine, n_semanas=2)
 
-    st.subheader("Cumplimiento semanal (inspección detallada)")
-    semanal = queries.cumplimiento_semanal(engine)
-    if semanal.empty:
+    if diaria.empty:
         st.info("No hay camiones cargados en la flota todavía.")
-    else:
-        conteo = semanal["estado"].value_counts()
-        c1, c2, c3 = st.columns(3)
-        c1.metric("✅ Hechas", int(conteo.get("hecha", 0)))
-        c2.metric("⏳ Pendientes", int(conteo.get("pendiente", 0)))
-        c3.metric("🔴 Vencidas", int(conteo.get("vencida", 0)))
-        st.dataframe(
-            semanal.rename(columns={"patente": "Patente", "alias": "Camión", "estado": "Estado"}),
-            use_container_width=True, hide_index=True,
-        )
+        return
+
+    tabla = diaria.merge(semanal, on=["patente", "alias"], how="left")
+
+    dias_cols = [f"{etiqueta} {momento}" for etiqueta in queries.DIAS_SEMANA for momento in ("Inicio", "Fin")]
+    for col in dias_cols:
+        tabla[col] = tabla[col].apply(_icono)
+    tabla["Semanal (últ. 2 sem.)"] = tabla["inspeccion_semanal_2_sem"].apply(_icono)
+    tabla = tabla.drop(columns=["inspeccion_semanal_2_sem"])
+
+    tabla = tabla.rename(columns={"patente": "Patente", "alias": "Camión"})
+
+    st.dataframe(tabla, use_container_width=True, hide_index=True)
 
 
 with col1:

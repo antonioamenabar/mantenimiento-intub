@@ -4,24 +4,50 @@ Documentación oficial: https://dscope.github.io/docs/
 Ojo: existe también "DataScope Select" de LSEG/Refinitiv, que es un producto
 financiero totalmente distinto — no confundir la documentación.
 """
+from datetime import date, timedelta
+
 import requests
 
 from src import config
 
 BASE_URL = "https://www.mydatascope.com/api/external"
 
+# Sin start/end, la API solo devuelve una ventana reciente por defecto
+# (~8 días), no el histórico completo. Además, start/end filtran por la
+# fecha de ENVÍO del formulario (created_at), no por "Fecha Inicio Trabajos"
+# que llena el mecánico -- por eso pedimos con margen y filtramos por ese
+# campo después, en queries.py.
+#
+# OJO: se probó con una ventana de 60 días en una sola llamada y la API
+# devolvió los resultados con un hueco de ~3 semanas en el medio (posible
+# límite de resultados por request que trunca de forma no obvia en rangos
+# grandes). Con 21 días no se reproduce el problema. Si en el futuro se
+# necesita traer más historial, hay que pedirlo en varios llamados de rango
+# acotado (ej. por semana) y concatenar, no en un solo llamado grande.
+DEFAULT_LOOKBACK_DAYS = 21
 
-def fetch_form_answers(form_id: int) -> list[dict]:
-    """Trae todas las respuestas (submissions) de un formulario dado.
+
+def fetch_form_answers(form_id: int, start: str | None = None, end: str | None = None) -> list[dict]:
+    """Trae las respuestas (submissions) de un formulario dado.
+
+    `start`/`end` (formato "YYYY-MM-DD") filtran por fecha de envío del
+    formulario en Datascope. Si no se pasan, se usa una ventana amplia
+    (DEFAULT_LOOKBACK_DAYS) para no perder registros por la ventana corta
+    por defecto de la API.
 
     Cada elemento tiene: form_answer_id, form_id, form_name, user_name,
     created_at, updated_at, finished, y una lista "answers" con las
     respuestas a cada pregunta del formulario.
     """
+    if start is None:
+        start = (date.today() - timedelta(days=DEFAULT_LOOKBACK_DAYS)).isoformat()
+    if end is None:
+        end = date.today().isoformat()
+
     resp = requests.get(
         f"{BASE_URL}/answers",
         headers={"Authorization": config.DATASCOPE_API_KEY},
-        params={"form_id": form_id},
+        params={"form_id": form_id, "start": start, "end": end},
         timeout=30,
     )
     resp.raise_for_status()
@@ -86,8 +112,10 @@ def normalize_submission(submission: dict) -> dict:
     }
 
 
-def fetch_normalized_registros(form_id: int | None = None) -> list[dict]:
+def fetch_normalized_registros(
+    form_id: int | None = None, start: str | None = None, end: str | None = None
+) -> list[dict]:
     """Trae y normaliza todas las submissions del formulario de mantenimiento."""
     form_id = form_id or config.DATASCOPE_FORM_ID
-    raw = fetch_form_answers(form_id)
+    raw = fetch_form_answers(form_id, start=start, end=end)
     return [normalize_submission(s) for s in raw]
