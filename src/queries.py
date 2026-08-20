@@ -43,12 +43,35 @@ def _load_registros(engine, tipos: list[str]) -> pd.DataFrame:
 
 
 def _load_flota_activa(engine) -> pd.DataFrame:
-    stmt = select(flota).where(flota.c.activo.is_(True))
+    stmt = select(flota).where(flota.c.activo.is_(True)).order_by(flota.c.orden)
     with engine.connect() as conn:
-        return pd.read_sql(stmt, conn)
+        df = pd.read_sql(stmt, conn)
+    if not df.empty:
+        # Nombre corto (ej. "Camel 1", "Scania 2") para no ocupar tanto
+        # espacio en la tabla -- numera dentro de cada familia, respetando
+        # el orden ya definido por la columna `orden`.
+        df["nombre_corto"] = df["familia"] + " " + (df.groupby("familia").cumcount() + 1).astype(str)
+    return df
 
 
 DIAS_SEMANA = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+
+
+def opciones_semana(hoy: datetime | None = None, n_semanas: int = 10) -> list[tuple]:
+    """Lista de (lunes, etiqueta) para las últimas `n_semanas`, de la más
+    reciente (semana actual) a la más antigua. Para usar en un selector.
+    """
+    hoy = hoy or datetime.now()
+    lunes_actual = (hoy - timedelta(days=hoy.weekday())).date()
+    opciones = []
+    for i in range(n_semanas):
+        lunes = lunes_actual - timedelta(weeks=i)
+        domingo = lunes + timedelta(days=6)
+        etiqueta = f"{lunes.strftime('%d-%m')} al {domingo.strftime('%d-%m')}"
+        if i == 0:
+            etiqueta += " (semana actual)"
+        opciones.append((lunes, etiqueta))
+    return opciones
 
 
 def matriz_cumplimiento_diario(engine, semana_inicio=None, hoy: datetime | None = None) -> pd.DataFrame:
@@ -73,7 +96,7 @@ def matriz_cumplimiento_diario(engine, semana_inicio=None, hoy: datetime | None 
 
     filas = []
     for _, camion in flota_df.iterrows():
-        fila = {"patente": camion["patente"], "alias": camion["alias"]}
+        fila = {"patente": camion["patente"], "alias": camion["alias"], "nombre_corto": camion["nombre_corto"]}
         del_camion = registros[registros["patente"] == camion["patente"]]
         for dia, etiqueta in zip(dias, DIAS_SEMANA):
             col_inicio, col_fin = f"{etiqueta} Inicio", f"{etiqueta} Fin"
@@ -92,13 +115,16 @@ def matriz_cumplimiento_diario(engine, semana_inicio=None, hoy: datetime | None 
     return pd.DataFrame(filas)
 
 
-def semanal_ultimas_semanas_cerradas(engine, n_semanas: int = 2, hoy: datetime | None = None) -> pd.DataFrame:
+def semanal_ultimas_semanas_cerradas(
+    engine, n_semanas: int = 2, semana_referencia=None, hoy: datetime | None = None
+) -> pd.DataFrame:
     """Para cada camión activo: ¿se hizo la Inspección Semanal en alguna de
-    las últimas `n_semanas` semanas CERRADAS (lunes a domingo ya terminadas,
-    sin contar la semana actual en curso)?
+    las `n_semanas` semanas CERRADAS anteriores a `semana_referencia` (lunes
+    a domingo ya terminadas, sin contar esa semana). Por defecto,
+    `semana_referencia` es la semana actual real (hoy).
     """
     hoy = hoy or datetime.now()
-    lunes_semana_actual = (hoy - timedelta(days=hoy.weekday())).date()
+    lunes_semana_actual = semana_referencia or (hoy - timedelta(days=hoy.weekday())).date()
     fin_ventana = lunes_semana_actual - timedelta(days=1)  # domingo anterior
     inicio_ventana = lunes_semana_actual - timedelta(days=7 * n_semanas)
 
@@ -114,7 +140,6 @@ def semanal_ultimas_semanas_cerradas(engine, n_semanas: int = 2, hoy: datetime |
         cumplida = (registros["patente"] == camion["patente"]).any()
         resultado.append({
             "patente": camion["patente"],
-            "alias": camion["alias"],
             "inspeccion_semanal_2_sem": cumplida,
         })
     return pd.DataFrame(resultado)

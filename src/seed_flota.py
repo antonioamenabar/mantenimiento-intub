@@ -20,9 +20,12 @@ def load_csv() -> tuple[list[dict], list[dict]]:
     with open(CSV_PATH, encoding="utf-8") as f:
         for row in csv.DictReader(f):
             patente = (row.get("patente") or "").strip()
+            orden_raw = (row.get("orden") or "").strip()
             registro = {
                 "patente": patente,
                 "alias": row.get("alias", "").strip(),
+                "familia": row.get("familia", "").strip() or None,
+                "orden": int(orden_raw) if orden_raw else None,
                 "activo": row.get("activo", "true").strip().lower() == "true",
             }
             if patente:

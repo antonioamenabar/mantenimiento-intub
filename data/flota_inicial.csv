@@ -1,19 +1,19 @@
-patente,alias,fuente,activo,revisar
-HLYR85,Camión Vactor 2015,drive+datascope,true,false
-RDPT96,Camión Camel 2014 Carrete Medio,drive+datascope,true,false
-TWRD48,Camión Scorza1,drive+datascope,true,false
-VGRJ98,Camión Scania Naranjo,drive+datascope,true,false
-TDKR30,Camión Scania Verde,drive+datascope,true,false
-TBGD22,Camión Camel 2022,drive+datascope,true,false
-TWRD42,Camión Camel 2018,drive+datascope,true,false
-VHSJ59,Camión Camel 2023 (VHSJ59),drive+datascope,true,false
-VHSH45,Camión Camel 2023 (VHSH45),drive+datascope,true,false
-TDLR57,Camión Scania Azul,drive+datascope,true,false
-VFJH22,Camión Scorza2,drive+datascope,true,false
-PDFK57,Por confirmar - aparece en Datascope pero no en carpetas de Drive,datascope,true,true
-HSKG53,Por confirmar - aparece en Datascope pero no en carpetas de Drive,datascope,true,true
-SPSC56,Camión Vactor 2023,drive,true,true
-TSSZ75,Camión Camel PESCO,drive,true,true
-,Camión Camel 6 2024 - falta patente,drive,true,true
-,Camión Camel 7 Carrete Medio - falta patente,drive,true,true
-,Camión Scorza3 - falta patente,drive,true,true
+patente,alias,familia,orden,fuente,activo,revisar
+RDPT96,Camión Camel 2014 Carrete Medio,Camel,1,drive+datascope,true,false
+TBGD22,Camión Camel 2022,Camel,2,drive+datascope,true,false
+TWRD42,Camión Camel 2018,Camel,3,drive+datascope,true,false
+VHSH45,Camión Camel 2023 (VHSH45),Camel,4,drive+datascope,true,false
+VHSJ59,Camión Camel 2023 (VHSJ59),Camel,5,drive+datascope,true,false
+TDKR30,Camión Scania Verde,Scania,6,drive+datascope,true,false
+TDLR57,Camión Scania Azul,Scania,7,drive+datascope,true,false
+VGRJ98,Camión Scania Naranjo,Scania,8,drive+datascope,true,false
+TWRD48,Camión Scorza1,Scorza,9,drive+datascope,true,false
+VFJH22,Camión Scorza2,Scorza,10,drive+datascope,true,false
+HLYR85,Camión Vactor 2015,Vactor,11,drive+datascope,true,false
+PDFK57,Por confirmar - aparece en Datascope pero no en carpetas de Drive,Otro,12,datascope,true,true
+HSKG53,Por confirmar - aparece en Datascope pero no en carpetas de Drive,Otro,13,datascope,true,true
+SPSC56,Camión Vactor 2023 (excluido del dashboard a pedido de Antonio),Vactor,,drive,false,true
+TSSZ75,Camión Camel PESCO (excluido del dashboard a pedido de Antonio),Camel,,drive,false,true
+,Camión Camel 6 2024 - falta patente,Camel,,drive,true,true
+,Camión Camel 7 Carrete Medio - falta patente,Camel,,drive,true,true
+,Camión Scorza3 - falta patente,Scorza,,drive,true,true

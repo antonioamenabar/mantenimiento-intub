@@ -37,6 +37,8 @@ flota = Table(
     metadata,
     Column("patente", String(20), primary_key=True),
     Column("alias", String(120)),
+    Column("familia", String(30)),
+    Column("orden", Integer),
     Column("activo", Boolean, default=True),
 )
 
