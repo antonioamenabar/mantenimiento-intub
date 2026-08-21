@@ -216,13 +216,19 @@ def fetch_normalized_tickets(start: str | None = None, end: str | None = None) -
 ESTADOS_NO_CERRADOS = ["open", "in_progress", "paused"]
 
 
-def fetch_tickets_no_cerrados(chunk_days: int = 90, max_chunks: int = 20) -> list[dict]:
-    """Trae TODOS los tickets no cerrados de toda la historia de la cuenta,
-    no solo los últimos 90 días -- un ticket abierto hace más de 90 días
-    igual debe contar como pendiente. Como la API limita cada consulta a
-    `chunk_days` días, se pide en bloques hacia atrás en el tiempo hasta que
-    un bloque vuelve vacío (se asume que ahí termina el historial de la
-    cuenta).
+def fetch_tickets_no_cerrados(chunk_days: int = 90, max_chunks: int = 2) -> list[dict]:
+    """Trae los tickets no cerrados de los últimos ~6 meses (chunk_days *
+    max_chunks). Como la API limita cada consulta a `chunk_days` días, se
+    pide en bloques hacia atrás en el tiempo.
+
+    OJO: se probó primero traer TODO el historial de la cuenta (sin límite
+    de meses) y aparecieron 10 tickets abiertos de hace 7-11 meses que no
+    calzaban con el conteo "En progreso" que muestra la propia web de
+    Datascope (57) -- 7 de esos 10 ni siquiera tenían camión asociado y
+    parecían pruebas de cuando se armó la cuenta. Se dejó este límite de 6
+    meses a propósito para que el dashboard coincida con lo que el equipo ve
+    en Datascope. Si de verdad hay una falla real pendiente de hace más de 6
+    meses, no va a aparecer aquí -- hay que revisarla directo en Datascope.
     """
     vistos = {}
     for estado in ESTADOS_NO_CERRADOS:
@@ -238,6 +244,6 @@ def fetch_tickets_no_cerrados(chunk_days: int = 90, max_chunks: int = 20) -> lis
     return list(vistos.values())
 
 
-def fetch_normalized_tickets_no_cerrados(chunk_days: int = 90, max_chunks: int = 20) -> list[dict]:
+def fetch_normalized_tickets_no_cerrados(chunk_days: int = 90, max_chunks: int = 2) -> list[dict]:
     raw = fetch_tickets_no_cerrados(chunk_days=chunk_days, max_chunks=max_chunks)
     return [normalize_ticket(t) for t in raw]

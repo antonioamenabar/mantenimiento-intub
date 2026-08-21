@@ -27,7 +27,7 @@ def main():
     print(f"  {len(faenas)} registros obtenidos.")
     db.upsert_faenas(engine, faenas, synced_at=ahora)
 
-    print("Conectando a Datascope (Tickets / findings, no cerrados, todo el historial)...")
+    print("Conectando a Datascope (Tickets / findings, no cerrados, últimos ~6 meses)...")
     tickets = datascope_client.fetch_normalized_tickets_no_cerrados()
     print(f"  {len(tickets)} tickets obtenidos.")
     db.replace_tickets(engine, tickets, synced_at=ahora)
