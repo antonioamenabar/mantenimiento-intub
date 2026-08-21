@@ -143,7 +143,8 @@ def render_inspecciones():
           div[data-testid="stSelectbox"] .react-aria-ComboBox,
           div[data-testid="stSelectbox"] .react-aria-ComboBox *,
           div[data-testid="stMultiSelect"] .react-aria-ComboBox,
-          div[data-testid="stMultiSelect"] .react-aria-ComboBox * {{
+          div[data-testid="stMultiSelect"] .react-aria-ComboBox *,
+          div[data-testid="stPopover"] button {{
             font-size: {TABLE_FONT_PX}px !important;
           }}
         </style>
@@ -151,13 +152,20 @@ def render_inspecciones():
         unsafe_allow_html=True,
     )
 
-    col_semana, col_patentes = st.columns(2)
+    # Columnas dimensionadas al contenido real (no 50/50) para que Patentes
+    # quede pegado a Semana, no repartido a lo ancho de toda la fila.
+    ANCHO_SEMANA = TABLE_WIDTH_PX // 2
+    ANCHO_PATENTES_BOTON = 170
+    col_semana, col_patentes = st.columns(
+        [ANCHO_SEMANA, ANCHO_PATENTES_BOTON], gap="small",
+        width=ANCHO_SEMANA + ANCHO_PATENTES_BOTON + 16,
+    )
 
     with col_semana:
         opciones = queries.opciones_semana()
         idx = st.selectbox(
             "Semana", options=range(len(opciones)), format_func=lambda i: opciones[i][1],
-            key="semana_inspecciones", width=TABLE_WIDTH_PX // 2,
+            key="semana_inspecciones", width=ANCHO_SEMANA,
         )
         semana_inicio = opciones[idx][0]
 
@@ -165,15 +173,21 @@ def render_inspecciones():
         todas_patentes = queries.opciones_patentes(engine)
         default_patentes = todas_patentes.loc[todas_patentes["activo"], "patente"].tolist()
         nombre_por_patente = dict(zip(todas_patentes["patente"], todas_patentes["nombre_corto"]))
-        patentes_sel = st.multiselect(
-            "Patentes",
-            options=todas_patentes["patente"].tolist(),
-            default=default_patentes,
-            format_func=lambda p: nombre_por_patente.get(p, p),
-            key="patentes_inspecciones",
-            width=TABLE_WIDTH_PX // 2,
-            wrap=False,  # una sola fila de chips, con scroll horizontal, como el filtro de Semana
-        )
+        # Botón compacto (como el de Semana) que abre un desplegable con el
+        # multiselect real -- así las patentes no quedan siempre visibles.
+        n_sel = len(st.session_state.get("patentes_inspecciones", default_patentes))
+        # Semana tiene una etiqueta arriba que el botón del popover no tiene
+        # -- este espacio los deja a la misma altura visual.
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        with st.popover(f"Patentes ({n_sel}) ▾", width=ANCHO_PATENTES_BOTON):
+            patentes_sel = st.multiselect(
+                "Patentes",
+                options=todas_patentes["patente"].tolist(),
+                default=default_patentes,
+                format_func=lambda p: nombre_por_patente.get(p, p),
+                key="patentes_inspecciones",
+                label_visibility="collapsed",
+            )
 
     if not patentes_sel:
         st.info("Selecciona al menos una patente.")
