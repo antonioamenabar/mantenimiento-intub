@@ -67,6 +67,26 @@ tickets = Table(
     Column("synced_at", DateTime),
 )
 
+# Foto histórica semanal del cuadrante de Fallas -- se llena con
+# src/snapshot_fallas.py, pensado para correr cada lunes 8:00 AM vía Tarea
+# Programada de Windows. Clave compuesta (semana_inicio, patente).
+fallas_historico = Table(
+    "fallas_historico",
+    metadata,
+    Column("semana_inicio", String(10), primary_key=True),  # "YYYY-MM-DD" del lunes
+    Column("patente", String(20), primary_key=True),
+    Column("nombre_corto", String(60)),
+    Column("critica", Integer),
+    Column("alta", Integer),
+    Column("media", Integer),
+    Column("baja", Integer),
+    Column("menos_7_dias", Integer),
+    Column("entre_8_20_dias", Integer),
+    Column("mas_20_dias", Integer),
+    Column("total", Integer),
+    Column("snapshot_at", DateTime),
+)
+
 flota = Table(
     "flota",
     metadata,
@@ -90,18 +110,21 @@ def init_db(engine=None):
     return engine
 
 
-def _upsert(engine, table, filas: list[dict], pk_col: str):
-    """Inserta o actualiza filas de forma idempotente por `pk_col`. Funciona
-    tanto en SQLite como en Postgres.
+def _upsert(engine, table, filas: list[dict], pk_cols: str | list[str]):
+    """Inserta o actualiza filas de forma idempotente por `pk_cols` (una
+    columna o una lista, para clave compuesta). Funciona tanto en SQLite
+    como en Postgres.
     """
     if not filas:
         return
+    if isinstance(pk_cols, str):
+        pk_cols = [pk_cols]
     insert_fn = pg_insert if engine.dialect.name == "postgresql" else sqlite_insert
     with engine.begin() as conn:
         for fila in filas:
             stmt = insert_fn(table).values(**fila)
-            update_cols = {k: v for k, v in fila.items() if k != pk_col}
-            stmt = stmt.on_conflict_do_update(index_elements=[pk_col], set_=update_cols)
+            update_cols = {k: v for k, v in fila.items() if k not in pk_cols}
+            stmt = stmt.on_conflict_do_update(index_elements=pk_cols, set_=update_cols)
             conn.execute(stmt)
 
 
@@ -134,3 +157,12 @@ def replace_tickets(engine, filas_tickets: list[dict], synced_at):
         conn.execute(tickets.delete())
         if filas:
             conn.execute(tickets.insert(), filas)
+
+
+def upsert_fallas_historico(engine, filas_historico: list[dict], snapshot_at):
+    """Guarda (o actualiza si ya existía) la foto histórica de Fallas de una
+    semana. Idempotente por (semana_inicio, patente) -- correr el snapshot
+    dos veces para la misma semana simplemente actualiza los mismos datos.
+    """
+    filas = [{**f, "snapshot_at": snapshot_at} for f in filas_historico]
+    _upsert(engine, fallas_historico, filas, ["semana_inicio", "patente"])

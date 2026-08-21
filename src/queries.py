@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from sqlalchemy import select
 
-from src.db import mantenimiento_registros, faenas_registros, tickets, flota
+from src.db import mantenimiento_registros, faenas_registros, tickets, fallas_historico, flota
 
 FECHA_FORMATOS = ["%d-%m-%Y %H:%M", "%d-%m-%Y"]
 
@@ -309,3 +309,46 @@ def matriz_fallas(engine, patentes: list[str] | None = None) -> pd.DataFrame:
         fila["Total"] = total
         filas.append(fila)
     return pd.DataFrame(filas)
+
+
+# Nombres de columna en fallas_historico -> nombres que usa matriz_fallas()
+# (para que ambas fuentes se puedan mostrar con la misma tabla HTML).
+_HISTORICO_A_MATRIZ = {
+    "critica": "Crítica", "alta": "Alta", "media": "Media", "baja": "Baja",
+    "menos_7_dias": "Menos de 7 días", "entre_8_20_dias": "Entre 8 y 20 días",
+    "mas_20_dias": "Más de 20 días", "total": "Total",
+}
+
+
+def _load_fallas_historico(engine, semana_inicio) -> pd.DataFrame:
+    stmt = select(fallas_historico).where(fallas_historico.c.semana_inicio == semana_inicio.strftime("%Y-%m-%d"))
+    with engine.connect() as conn:
+        df = pd.read_sql(stmt, conn)
+    return df.rename(columns=_HISTORICO_A_MATRIZ)
+
+
+def matriz_fallas_semana(
+    engine, semana_inicio, patentes: list[str] | None = None, hoy: datetime | None = None,
+) -> tuple[pd.DataFrame, bool]:
+    """Igual que matriz_fallas(), pero para una semana elegida (como en
+    Inspecciones). Si `semana_inicio` es la semana actual, se calcula en
+    vivo (estado de ahora mismo). Si es una semana pasada, se busca la foto
+    guardada por `snapshot_fallas.py` -- devuelve DataFrame vacío si esa
+    semana todavía no tiene foto guardada.
+
+    Devuelve (tabla, es_en_vivo).
+    """
+    hoy = hoy or datetime.now()
+    lunes_actual = (hoy - timedelta(days=hoy.weekday())).date()
+    if hasattr(semana_inicio, "date"):
+        semana_inicio = semana_inicio.date() if not isinstance(semana_inicio, type(lunes_actual)) else semana_inicio
+
+    if semana_inicio >= lunes_actual:
+        return matriz_fallas(engine, patentes=patentes), True
+
+    df = _load_fallas_historico(engine, semana_inicio)
+    if patentes is not None and not df.empty:
+        df = df[df["patente"].isin(patentes)]
+        orden = {p: i for i, p in enumerate(patentes)}
+        df = df.sort_values(by="patente", key=lambda s: s.map(orden)).reset_index(drop=True)
+    return df, False

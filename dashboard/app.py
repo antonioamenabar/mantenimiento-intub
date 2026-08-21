@@ -164,21 +164,25 @@ def _tabla_fallas_html(tabla) -> str:
     return f"""
     <style>
       .tabla-fallas {{
-        border-collapse: collapse; font-size: 11px; width: {FALLAS_WIDTH_PX}px;
+        border-collapse: collapse; font-size: 12px; width: {FALLAS_WIDTH_PX}px;
       }}
       .tabla-fallas th, .tabla-fallas td {{
         border: 1px solid rgba(128,128,128,0.35);
         padding: 2px 3px;
         text-align: center;
         white-space: nowrap;
+        line-height: 1.2;
         box-sizing: border-box;
       }}
       .tabla-fallas td.num {{ width: 26px; }}
       .tabla-fallas td.total {{ font-weight: 600; }}
       .tabla-fallas td.nombre, .tabla-fallas td.patente {{ text-align: left; font-weight: 500; }}
-      .tabla-fallas td.patente {{ opacity: 0.7; font-size: 10px; width: 46px; }}
+      .tabla-fallas td.patente {{ opacity: 0.7; font-size: 11px; width: 46px; }}
       .tabla-fallas td.nombre {{ width: 62px; }}
-      .tabla-fallas thead th {{ background: rgba(128,128,128,0.12); font-size: 9px; font-weight: 700; }}
+      .tabla-fallas thead th {{
+        background: rgba(128,128,128,0.12); font-size: 10px; font-weight: 700;
+        padding-top: 10px; padding-bottom: 11px;
+      }}
     </style>
     <table class="tabla-fallas">
       <thead>
@@ -199,25 +203,67 @@ def _tabla_fallas_html(tabla) -> str:
 
 def render_fallas():
     tooltip = ("Cantidad de tickets de fallas ABIERTOS (no cerrados) por camión, según "
-               "prioridad -- de toda la historia de la cuenta, no solo de los últimos días "
-               "(menú Tickets de Datascope).")
+               "prioridad. La semana actual se calcula en vivo; las semanas pasadas muestran "
+               "la foto guardada el lunes siguiente (menú Tickets de Datascope).")
     st.markdown(
         f"<h4 title='{tooltip}' style='margin:4px 0 6px 0; text-align:left; font-weight:600; "
         f"font-size:15px; cursor:help;'>⚠️ Fallas</h4>",
         unsafe_allow_html=True,
     )
 
-    todas_patentes = queries.opciones_patentes(engine)
-    default_patentes = todas_patentes.loc[todas_patentes["activo"], "patente"].tolist()
-    tabla = queries.matriz_fallas(engine, patentes=default_patentes)
+    # Mismo st.markdown "vacío" (sin contenido visible) que en Inspecciones,
+    # para que el espacio antes de los filtros quede igual y ambas tablas
+    # arranquen a la misma altura.
+    st.markdown("<style></style>", unsafe_allow_html=True)
+
+    ANCHO_SEMANA = FALLAS_WIDTH_PX // 2
+    ANCHO_PATENTES_BOTON = FALLAS_WIDTH_PX // 2
+    col_semana, col_patentes = st.columns(
+        [ANCHO_SEMANA, ANCHO_PATENTES_BOTON], gap="small",
+        width=ANCHO_SEMANA + ANCHO_PATENTES_BOTON + 16,
+    )
+
+    with col_semana:
+        opciones = queries.opciones_semana()
+        idx = st.selectbox(
+            "Semana", options=range(len(opciones)), format_func=lambda i: opciones[i][1],
+            key="semana_fallas", width=ANCHO_SEMANA,
+        )
+        semana_inicio = opciones[idx][0]
+
+    with col_patentes:
+        todas_patentes = queries.opciones_patentes(engine)
+        default_patentes = todas_patentes.loc[todas_patentes["activo"], "patente"].tolist()
+        nombre_por_patente = dict(zip(todas_patentes["patente"], todas_patentes["nombre_corto"]))
+        n_sel = len(st.session_state.get("patentes_fallas", default_patentes))
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        with st.popover(f"Patentes ({n_sel}) ▾", width=ANCHO_PATENTES_BOTON):
+            patentes_sel = st.multiselect(
+                "Patentes",
+                options=todas_patentes["patente"].tolist(),
+                default=default_patentes,
+                format_func=lambda p: nombre_por_patente.get(p, p),
+                key="patentes_fallas",
+                label_visibility="collapsed",
+            )
+
+    if not patentes_sel:
+        st.info("Selecciona al menos una patente.")
+        return
+
+    tabla, en_vivo = queries.matriz_fallas_semana(engine, semana_inicio, patentes=patentes_sel)
 
     if tabla.empty:
-        st.info("No hay camiones seleccionados.")
+        st.info("Todavía no hay una foto histórica guardada para esta semana "
+                "(se guarda automáticamente el lunes siguiente a las 8:00 AM).")
         return
 
     st.html(_tabla_fallas_html(tabla))
 
-    st.caption(f"Total de tickets abiertos (todas las prioridades, todos los camiones): **{tabla['Total'].sum()}**")
+    etiqueta_vivo = "en vivo" if en_vivo else "foto del lunes"
+    st.caption(
+        f"Total de tickets abiertos ({etiqueta_vivo}, todas las prioridades): **{tabla['Total'].sum()}**"
+    )
 
 
 def render_inspecciones():
