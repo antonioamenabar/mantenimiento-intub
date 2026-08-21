@@ -33,6 +33,9 @@ engine = db.get_engine()
 # mitad, para el de semana) para que quede todo alineado.
 TABLE_WIDTH_PX = 620
 TABLE_FONT_PX = 12
+# Ancho de la tabla de Fallas, pensado para quedar al lado de Inspecciones
+# (no debajo), con columnas al mínimo para que quepa todo sin scroll.
+FALLAS_WIDTH_PX = 400
 
 
 def _icono(valor):
@@ -128,46 +131,54 @@ def _tabla_html(tabla, semana_inicio) -> str:
 
 
 def _tabla_fallas_html(tabla) -> str:
-    """Tabla HTML propia para Fallas: Patente, Camión, Crítica/Alta/Media/Baja
-    y Total, con las columnas de prioridad coloreadas por severidad.
+    """Tabla HTML propia para Fallas: Patente, Camión, Crítica/Alta/Media/Baja,
+    antigüedad (3 rangos) y Total, con las columnas de prioridad coloreadas
+    por severidad. Columnas al mínimo para que quepa al lado de Inspecciones.
     """
     color = {"Crítica": "#d32f2f", "Alta": "#f57c00", "Media": "#fbc02d", "Baja": "#388e3c"}
     cols_prioridad = list(queries.PRIORIDAD_LABEL.values())
+    cols_antiguedad = queries.ANTIGUEDAD_BUCKETS
+    head_antiguedad_corto = {
+        "Menos de 7 días": "<7 días",
+        "Entre 8 y 20 días": "8-20 días",
+        "Más de 20 días": ">20 días",
+    }
 
     filas_html = []
     for _, row in tabla.iterrows():
-        celdas = "".join(f"<td class='dia'>{row[c]}</td>" for c in cols_prioridad)
+        celdas_prio = "".join(f"<td class='num'>{row[c]}</td>" for c in cols_prioridad)
+        celdas_edad = "".join(f"<td class='num'>{row[c]}</td>" for c in cols_antiguedad)
         filas_html.append(
             "<tr>"
             f"<td class='patente'>{row['patente']}</td>"
             f"<td class='nombre'>{row['nombre_corto']}</td>"
-            f"{celdas}"
-            f"<td class='dia total'>{row['Total']}</td>"
+            f"{celdas_prio}"
+            f"{celdas_edad}"
+            f"<td class='num total'>{row['Total']}</td>"
             "</tr>"
         )
 
-    head_prioridad = "".join(
-        f"<th style='color:{color[c]}'>{c}</th>" for c in cols_prioridad
-    )
+    head_prioridad = "".join(f"<th style='color:{color[c]}'>{c}</th>" for c in cols_prioridad)
+    head_antiguedad = "".join(f"<th>{head_antiguedad_corto[c]}</th>" for c in cols_antiguedad)
 
     return f"""
     <style>
       .tabla-fallas {{
-        border-collapse: collapse; font-size: 12px; width: {TABLE_WIDTH_PX}px;
+        border-collapse: collapse; font-size: 11px; width: {FALLAS_WIDTH_PX}px;
       }}
       .tabla-fallas th, .tabla-fallas td {{
         border: 1px solid rgba(128,128,128,0.35);
-        padding: 3px 6px;
+        padding: 2px 3px;
         text-align: center;
         white-space: nowrap;
         box-sizing: border-box;
       }}
-      .tabla-fallas td.dia {{ width: 60px; }}
+      .tabla-fallas td.num {{ width: 26px; }}
       .tabla-fallas td.total {{ font-weight: 600; }}
       .tabla-fallas td.nombre, .tabla-fallas td.patente {{ text-align: left; font-weight: 500; }}
-      .tabla-fallas td.patente {{ opacity: 0.7; font-size: 11px; width: 62px; }}
-      .tabla-fallas td.nombre {{ width: 88px; }}
-      .tabla-fallas thead th {{ background: rgba(128,128,128,0.12); font-size: 11px; font-weight: 700; }}
+      .tabla-fallas td.patente {{ opacity: 0.7; font-size: 10px; width: 46px; }}
+      .tabla-fallas td.nombre {{ width: 62px; }}
+      .tabla-fallas thead th {{ background: rgba(128,128,128,0.12); font-size: 9px; font-weight: 700; }}
     </style>
     <table class="tabla-fallas">
       <thead>
@@ -175,6 +186,7 @@ def _tabla_fallas_html(tabla) -> str:
           <th>Patente</th>
           <th>Camión</th>
           {head_prioridad}
+          {head_antiguedad}
           <th>Total</th>
         </tr>
       </thead>
@@ -298,9 +310,15 @@ def render_inspecciones():
         st.caption("Sin checklists esperados en esta semana para los camiones seleccionados.")
 
 
-render_inspecciones()
-st.divider()
-render_fallas()
+col_inspecciones, col_fallas = st.columns(
+    [TABLE_WIDTH_PX, FALLAS_WIDTH_PX], gap="small",
+    width=TABLE_WIDTH_PX + FALLAS_WIDTH_PX + 16,
+)
+with col_inspecciones:
+    render_inspecciones()
+with col_fallas:
+    render_fallas()
+
 st.divider()
 
 col3, col4 = st.columns(2)

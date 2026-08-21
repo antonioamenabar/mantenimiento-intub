@@ -249,6 +249,29 @@ def semanal_ultimas_semanas_cerradas(
 PRIORIDADES = ["critical", "high", "medium", "low"]
 PRIORIDAD_LABEL = {"critical": "Crítica", "high": "Alta", "medium": "Media", "low": "Baja"}
 
+ANTIGUEDAD_BUCKETS = ["Menos de 7 días", "Entre 8 y 20 días", "Más de 20 días"]
+
+
+def _dias_antiguedad(creation_date_str, hoy: datetime | None = None):
+    hoy = hoy or datetime.now()
+    if not creation_date_str:
+        return None
+    try:
+        fecha = datetime.strptime(creation_date_str, "%d/%m/%Y %H:%M")
+    except ValueError:
+        return None
+    return (hoy - fecha).days
+
+
+def _bucket_antiguedad(dias) -> str | None:
+    if dias is None:
+        return None
+    if dias < 7:
+        return "Menos de 7 días"
+    if dias <= 20:
+        return "Entre 8 y 20 días"
+    return "Más de 20 días"
+
 
 def _load_tickets(engine) -> pd.DataFrame:
     stmt = select(tickets)
@@ -277,6 +300,12 @@ def matriz_fallas(engine, patentes: list[str] | None = None) -> pd.DataFrame:
             n = int((del_camion["priority"] == p).sum()) if not del_camion.empty else 0
             fila[PRIORIDAD_LABEL[p]] = n
             total += n
+        if not del_camion.empty:
+            buckets = del_camion["creation_date"].apply(lambda d: _bucket_antiguedad(_dias_antiguedad(d)))
+        else:
+            buckets = pd.Series(dtype="object")
+        for b in ANTIGUEDAD_BUCKETS:
+            fila[b] = int((buckets == b).sum())
         fila["Total"] = total
         filas.append(fila)
     return pd.DataFrame(filas)
