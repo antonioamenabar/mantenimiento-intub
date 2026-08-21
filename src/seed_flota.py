@@ -26,7 +26,7 @@ def load_csv() -> tuple[list[dict], list[dict]]:
                 "alias": row.get("alias", "").strip(),
                 "familia": row.get("familia", "").strip() or None,
                 "orden": int(orden_raw) if orden_raw else None,
-                "nombre_override": row.get("nombre_override", "").strip() or None,
+                "nombre_corto": row.get("nombre_corto", "").strip() or None,
                 "activo": row.get("activo", "true").strip().lower() == "true",
             }
             if patente:

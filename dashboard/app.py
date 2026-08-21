@@ -27,6 +27,11 @@ st.markdown(
 
 engine = db.get_engine()
 
+# Ancho objetivo de la tabla de Inspecciones (~1/2 de una pantalla de
+# escritorio típica). Los filtros de arriba se fuerzan al mismo ancho para
+# que quede todo alineado.
+TABLE_WIDTH_PX = 620
+
 
 def _icono(valor):
     if valor is None:
@@ -36,10 +41,18 @@ def _icono(valor):
     return "✅" if valor else "❌"
 
 
+def _celda(valor, foto_url):
+    icono = _icono(valor)
+    if valor is True and foto_url:
+        return f'<a href="{foto_url}" target="_blank" title="Ver foto del reporte">{icono}</a>'
+    return icono
+
+
 def _tabla_html(tabla) -> str:
     """Tabla HTML propia: header combinado (día arriba, Inicio/Fin abajo,
-    como celda unida) y todo centrado. El widget nativo de Streamlit no
-    permite ni lo uno ni lo otro.
+    como celda unida), todo centrado, y las ✅ con foto son un link directo
+    al reporte de Datascope. El widget nativo de Streamlit no permite nada
+    de esto.
     """
     dias = queries.DIAS_SEMANA
     head_dias = "".join(f'<th colspan="2">{d}</th>' for d in dias)
@@ -48,46 +61,56 @@ def _tabla_html(tabla) -> str:
     filas_html = []
     for _, row in tabla.iterrows():
         celdas_dias = "".join(
-            f"<td class='dia'>{_icono(row[f'{d} {momento}'])}</td>"
+            f"<td class='dia'>{_celda(row[f'{d} {momento}'], row.get(f'{d} {momento}_foto'))}</td>"
             for d in dias for momento in ("Inicio", "Fin")
         )
+        pct = row["pct_cumplimiento"]
+        # pandas guarda los None de una columna float como NaN; NaN != NaN
+        # es la forma más simple de detectarlo sin depender de pandas aquí.
+        pct_txt = f"{pct:.0f}%" if pct is not None and pct == pct else "—"
         filas_html.append(
             "<tr>"
-            f"<td class='nombre'>{row['nombre_corto']}</td>"
             f"<td class='patente'>{row['patente']}</td>"
+            f"<td class='nombre'>{row['nombre_corto']}</td>"
             f"{celdas_dias}"
             f"<td class='dia'>{_icono(row['inspeccion_semanal_2_sem'])}</td>"
+            f"<td class='dia pct'>{pct_txt}</td>"
             "</tr>"
         )
 
     return f"""
     <style>
       .tabla-inspecciones {{
-        border-collapse: collapse; font-size: 10px; width: auto;
+        border-collapse: collapse; font-size: 12px; width: {TABLE_WIDTH_PX}px;
       }}
       .tabla-inspecciones th, .tabla-inspecciones td {{
         border: 1px solid rgba(128,128,128,0.35);
-        padding: 1px 3px;
+        padding: 2px 4px;
         text-align: center;
         white-space: nowrap;
-        line-height: 1.1;
+        line-height: 1.2;
+        box-sizing: border-box;
       }}
-      .tabla-inspecciones td.dia {{ width: 16px; }}
+      .tabla-inspecciones td.dia {{ width: 36px; }}
+      .tabla-inspecciones td.pct {{ font-weight: 600; }}
       .tabla-inspecciones td.nombre, .tabla-inspecciones td.patente {{
         text-align: left; font-weight: 500;
       }}
-      .tabla-inspecciones td.patente {{ opacity: 0.7; font-size: 9px; }}
+      .tabla-inspecciones td.patente {{ opacity: 0.7; font-size: 11px; width: 62px; }}
+      .tabla-inspecciones td.nombre {{ width: 88px; }}
+      .tabla-inspecciones a {{ text-decoration: none; }}
       .tabla-inspecciones thead th {{
-        background: rgba(128,128,128,0.12); font-size: 9px;
+        background: rgba(128,128,128,0.12); font-size: 10px;
       }}
     </style>
     <table class="tabla-inspecciones">
       <thead>
         <tr>
-          <th rowspan="2">Camión</th>
           <th rowspan="2">Patente</th>
+          <th rowspan="2">Camión</th>
           {head_dias}
           <th rowspan="2">Sem.<br>2 sem.</th>
+          <th rowspan="2">%<br>Cumpl.</th>
         </tr>
         <tr>{head_sub}</tr>
       </thead>
@@ -99,8 +122,24 @@ def _tabla_html(tabla) -> str:
 
 
 def render_inspecciones():
-    st.header("🔍 Inspecciones")
-    st.caption("Por cada día, si se hizo el checklist de Inicio y el de Fin de jornada (por separado).")
+    st.markdown(
+        "<h4 style='margin:4px 0 6px 0; text-align:left; font-weight:600; font-size:15px;'>🔍 Inspecciones</h4>",
+        unsafe_allow_html=True,
+    )
+    st.caption("Por cada día, si se hizo el checklist de Inicio y el de Fin de jornada (por separado). "
+               "Clic en un ✅ para ver la foto del reporte.")
+
+    # Fuerza los widgets de Semana y Patentes al mismo ancho que la tabla.
+    st.markdown(
+        f"""
+        <style>
+          div[data-testid="stSelectbox"], div[data-testid="stMultiSelect"] {{
+            max-width: {TABLE_WIDTH_PX}px;
+          }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     opciones = queries.opciones_semana()
     idx = st.selectbox(
@@ -108,15 +147,43 @@ def render_inspecciones():
     )
     semana_inicio = opciones[idx][0]
 
-    diaria = queries.matriz_cumplimiento_diario(engine, semana_inicio=semana_inicio)
-    semanal = queries.semanal_ultimas_semanas_cerradas(engine, n_semanas=2, semana_referencia=semana_inicio)
+    todas_patentes = queries.opciones_patentes(engine)
+    default_patentes = todas_patentes.loc[todas_patentes["activo"], "patente"].tolist()
+    nombre_por_patente = dict(zip(todas_patentes["patente"], todas_patentes["nombre_corto"]))
+    patentes_sel = st.multiselect(
+        "Patentes",
+        options=todas_patentes["patente"].tolist(),
+        default=default_patentes,
+        format_func=lambda p: f"{p} ({nombre_por_patente.get(p, '?')})",
+        key="patentes_inspecciones",
+    )
+
+    if not patentes_sel:
+        st.info("Selecciona al menos una patente.")
+        return
+
+    diaria = queries.matriz_cumplimiento_diario(engine, semana_inicio=semana_inicio, patentes=patentes_sel)
+    semanal = queries.semanal_ultimas_semanas_cerradas(
+        engine, n_semanas=2, semana_referencia=semana_inicio, patentes=patentes_sel,
+    )
 
     if diaria.empty:
-        st.info("No hay camiones cargados en la flota todavía.")
+        st.info("No hay camiones seleccionados.")
         return
 
     tabla = diaria.merge(semanal, on="patente", how="left")
     st.html(_tabla_html(tabla))
+
+    total_realizados = tabla["realizados"].sum()
+    total_esperados = tabla["esperados"].sum()
+    if total_esperados:
+        pct_total = total_realizados / total_esperados * 100
+        st.caption(
+            f"**Cumplimiento total de la semana: {pct_total:.0f}%** "
+            f"({total_realizados}/{total_esperados} checklists realizados)"
+        )
+    else:
+        st.caption("Sin checklists esperados en esta semana para los camiones seleccionados.")
 
 
 render_inspecciones()

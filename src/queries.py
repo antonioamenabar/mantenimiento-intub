@@ -26,6 +26,12 @@ def _parse_fecha(valor):
     return None
 
 
+def _primera_foto(fotos_str):
+    if not fotos_str:
+        return None
+    return fotos_str.split(", ")[0]
+
+
 def _load_registros(engine, tipos: list[str]) -> pd.DataFrame:
     stmt = select(mantenimiento_registros).where(
         mantenimiento_registros.c.tipo_mantenimiento.in_(tipos)
@@ -42,19 +48,29 @@ def _load_registros(engine, tipos: list[str]) -> pd.DataFrame:
     return df
 
 
-def _load_flota_activa(engine) -> pd.DataFrame:
-    stmt = select(flota).where(flota.c.activo.is_(True)).order_by(flota.c.orden)
+def _load_flota(engine, patentes: list[str] | None = None) -> pd.DataFrame:
+    """Carga el maestro de flota. Por defecto solo los camiones activos;
+    si se pasa `patentes`, carga exactamente esas (sin filtrar por activo --
+    así el filtro de patentes puede traer de vuelta camiones excluidos por
+    defecto, como SPSC56/TSSZ75).
+    """
+    stmt = select(flota)
+    if patentes is not None:
+        stmt = stmt.where(flota.c.patente.in_(patentes))
+    else:
+        stmt = stmt.where(flota.c.activo.is_(True))
+    stmt = stmt.order_by(flota.c.orden)
     with engine.connect() as conn:
-        df = pd.read_sql(stmt, conn)
-    if not df.empty:
-        # Nombre corto (ej. "Camel 1", "Scania 2") para no ocupar tanto
-        # espacio en la tabla -- numera dentro de cada familia, respetando
-        # el orden ya definido por la columna `orden`. `nombre_override` (si
-        # está definido) manda por sobre el nombre calculado.
-        df["nombre_corto"] = df["familia"] + " " + (df.groupby("familia").cumcount() + 1).astype(str)
-        tiene_override = df["nombre_override"].notna() & (df["nombre_override"].str.strip() != "")
-        df.loc[tiene_override, "nombre_corto"] = df.loc[tiene_override, "nombre_override"]
-    return df
+        return pd.read_sql(stmt, conn)
+
+
+def opciones_patentes(engine) -> pd.DataFrame:
+    """Todas las patentes disponibles para el filtro (activas + excluidas
+    por defecto), ordenadas igual que en la tabla.
+    """
+    stmt = select(flota).order_by(flota.c.orden)
+    with engine.connect() as conn:
+        return pd.read_sql(stmt, conn)
 
 
 def _set_trabajo(engine, lunes, domingo) -> set:
@@ -94,15 +110,21 @@ def opciones_semana(hoy: datetime | None = None, n_semanas: int = 10) -> list[tu
     return opciones
 
 
-def matriz_cumplimiento_diario(engine, semana_inicio=None, hoy: datetime | None = None) -> pd.DataFrame:
+def matriz_cumplimiento_diario(
+    engine, semana_inicio=None, hoy: datetime | None = None, patentes: list[str] | None = None
+) -> pd.DataFrame:
     """Matriz camión x día: una fila por camión, dos columnas por día de la
-    semana (lunes a domingo) -- "{Día} Inicio" y "{Día} Fin".
+    semana (lunes a viernes) -- "{Día} Inicio" y "{Día} Fin", más una columna
+    de foto por cada una ("{Día} Inicio_foto") y el % de cumplimiento total.
 
-    El valor es:
+    El valor de cada checklist es:
     - None si el día todavía no ha ocurrido (no aplica).
     - "N/A" si el camión no registra Reporte de Faenas en Terreno ese día
       (no salió a trabajar, así que no corresponde exigirle inspección).
     - True/False según si se hizo ese checklist puntual ese día.
+
+    `pct_cumplimiento` = realizados / esperados (solo días donde el camión
+    trabajó y ya ocurrieron) -- None si no le correspondía ninguno todavía.
     """
     hoy = hoy or datetime.now()
     lunes = semana_inicio or (hoy - timedelta(days=hoy.weekday())).date()
@@ -111,7 +133,7 @@ def matriz_cumplimiento_diario(engine, semana_inicio=None, hoy: datetime | None 
     dias = [lunes + timedelta(days=i) for i in range(7)]
     hoy_date = hoy.date()
 
-    flota_df = _load_flota_activa(engine)
+    flota_df = _load_flota(engine, patentes)
     registros = _load_registros(engine, [TIPO_INICIO, TIPO_FIN])
     if not registros.empty:
         registros = registros[registros["fecha_inicio_dt"].apply(
@@ -123,33 +145,53 @@ def matriz_cumplimiento_diario(engine, semana_inicio=None, hoy: datetime | None 
     for _, camion in flota_df.iterrows():
         fila = {"patente": camion["patente"], "alias": camion["alias"], "nombre_corto": camion["nombre_corto"]}
         del_camion = registros[registros["patente"] == camion["patente"]]
+        realizados = 0
+        esperados = 0
         for dia, etiqueta in zip(dias, DIAS_SEMANA):
             col_inicio, col_fin = f"{etiqueta} Inicio", f"{etiqueta} Fin"
+            foto_inicio, foto_fin = f"{col_inicio}_foto", f"{col_fin}_foto"
             if dia > hoy_date:
                 fila[col_inicio] = None  # día futuro, no aplica todavía
                 fila[col_fin] = None
+                fila[foto_inicio] = None
+                fila[foto_fin] = None
                 continue
             if (camion["patente"], dia) not in trabajo_set:
                 fila[col_inicio] = "N/A"  # no trabajó ese día
                 fila[col_fin] = "N/A"
+                fila[foto_inicio] = None
+                fila[foto_fin] = None
                 continue
+            esperados += 2
             if del_camion.empty:
                 fila[col_inicio] = False
                 fila[col_fin] = False
+                fila[foto_inicio] = None
+                fila[foto_fin] = None
                 continue
             del_dia = del_camion[del_camion["fecha_inicio_dt"].apply(lambda d: d.date() == dia)]
-            fila[col_inicio] = (del_dia["tipo_mantenimiento"] == TIPO_INICIO).any()
-            fila[col_fin] = (del_dia["tipo_mantenimiento"] == TIPO_FIN).any()
+            reg_inicio = del_dia[del_dia["tipo_mantenimiento"] == TIPO_INICIO]
+            reg_fin = del_dia[del_dia["tipo_mantenimiento"] == TIPO_FIN]
+            tiene_inicio, tiene_fin = not reg_inicio.empty, not reg_fin.empty
+            fila[col_inicio] = tiene_inicio
+            fila[col_fin] = tiene_fin
+            fila[foto_inicio] = _primera_foto(reg_inicio.iloc[0]["fotos"]) if tiene_inicio else None
+            fila[foto_fin] = _primera_foto(reg_fin.iloc[0]["fotos"]) if tiene_fin else None
+            realizados += int(tiene_inicio) + int(tiene_fin)
+        fila["realizados"] = realizados
+        fila["esperados"] = esperados
+        fila["pct_cumplimiento"] = (realizados / esperados * 100) if esperados else None
         filas.append(fila)
     return pd.DataFrame(filas)
 
 
 def semanal_ultimas_semanas_cerradas(
-    engine, n_semanas: int = 2, semana_referencia=None, hoy: datetime | None = None
+    engine, n_semanas: int = 2, semana_referencia=None, hoy: datetime | None = None,
+    patentes: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Para cada camión activo: ¿se hizo la Inspección Semanal en alguna de
-    las `n_semanas` semanas CERRADAS anteriores a `semana_referencia` (lunes
-    a domingo ya terminadas, sin contar esa semana). Por defecto,
+    """Para cada camión: ¿se hizo la Inspección Semanal en alguna de las
+    `n_semanas` semanas CERRADAS anteriores a `semana_referencia` (lunes a
+    domingo ya terminadas, sin contar esa semana). Por defecto,
     `semana_referencia` es la semana actual real (hoy).
     """
     hoy = hoy or datetime.now()
@@ -157,7 +199,7 @@ def semanal_ultimas_semanas_cerradas(
     fin_ventana = lunes_semana_actual - timedelta(days=1)  # domingo anterior
     inicio_ventana = lunes_semana_actual - timedelta(days=7 * n_semanas)
 
-    flota_df = _load_flota_activa(engine)
+    flota_df = _load_flota(engine, patentes)
     registros = _load_registros(engine, [TIPO_SEMANAL])
     if not registros.empty:
         registros = registros[registros["fecha_inicio_dt"].apply(

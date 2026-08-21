@@ -54,7 +54,7 @@ flota = Table(
     Column("alias", String(120)),
     Column("familia", String(30)),
     Column("orden", Integer),
-    Column("nombre_override", String(60)),
+    Column("nombre_corto", String(60)),
     Column("activo", Boolean, default=True),
 )
 
