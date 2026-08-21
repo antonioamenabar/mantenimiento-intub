@@ -34,12 +34,12 @@ def _tabla_html(tabla) -> str:
     """
     dias = queries.DIAS_SEMANA
     head_dias = "".join(f'<th colspan="2">{d}</th>' for d in dias)
-    head_sub = "".join("<th>Inicio</th><th>Fin</th>" for _ in dias)
+    head_sub = "".join("<th>I</th><th>F</th>" for _ in dias)
 
     filas_html = []
     for _, row in tabla.iterrows():
         celdas_dias = "".join(
-            f"<td>{_icono(row[f'{d} {momento}'])}</td>"
+            f"<td class='dia'>{_icono(row[f'{d} {momento}'])}</td>"
             for d in dias for momento in ("Inicio", "Fin")
         )
         filas_html.append(
@@ -47,27 +47,29 @@ def _tabla_html(tabla) -> str:
             f"<td class='nombre'>{row['nombre_corto']}</td>"
             f"<td class='patente'>{row['patente']}</td>"
             f"{celdas_dias}"
-            f"<td>{_icono(row['inspeccion_semanal_2_sem'])}</td>"
+            f"<td class='dia'>{_icono(row['inspeccion_semanal_2_sem'])}</td>"
             "</tr>"
         )
 
     return f"""
     <style>
       .tabla-inspecciones {{
-        border-collapse: collapse; font-size: 13px; width: 100%;
+        border-collapse: collapse; font-size: 10px; width: auto;
       }}
       .tabla-inspecciones th, .tabla-inspecciones td {{
         border: 1px solid rgba(128,128,128,0.35);
-        padding: 4px 8px;
+        padding: 1px 3px;
         text-align: center;
         white-space: nowrap;
+        line-height: 1.1;
       }}
+      .tabla-inspecciones td.dia {{ width: 16px; }}
       .tabla-inspecciones td.nombre, .tabla-inspecciones td.patente {{
         text-align: left; font-weight: 500;
       }}
-      .tabla-inspecciones td.patente {{ opacity: 0.7; font-size: 12px; }}
+      .tabla-inspecciones td.patente {{ opacity: 0.7; font-size: 9px; }}
       .tabla-inspecciones thead th {{
-        background: rgba(128,128,128,0.12);
+        background: rgba(128,128,128,0.12); font-size: 9px;
       }}
     </style>
     <table class="tabla-inspecciones">
@@ -76,7 +78,7 @@ def _tabla_html(tabla) -> str:
           <th rowspan="2">Camión</th>
           <th rowspan="2">Patente</th>
           {head_dias}
-          <th rowspan="2">Semanal<br>(últ. 2 sem.)</th>
+          <th rowspan="2">Sem.<br>2 sem.</th>
         </tr>
         <tr>{head_sub}</tr>
       </thead>

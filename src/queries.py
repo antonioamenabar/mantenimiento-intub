@@ -74,7 +74,7 @@ def _set_trabajo(engine, lunes, domingo) -> set:
     return resultado
 
 
-DIAS_SEMANA = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+DIAS_SEMANA = ["Lun", "Mar", "Mié", "Jue", "Vie"]  # checklist diario solo aplica de lunes a viernes
 
 
 def opciones_semana(hoy: datetime | None = None, n_semanas: int = 10) -> list[tuple]:
