@@ -5,6 +5,7 @@ Uso:
     streamlit run dashboard/app.py
 """
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -28,9 +29,10 @@ st.markdown(
 engine = db.get_engine()
 
 # Ancho objetivo de la tabla de Inspecciones (~1/2 de una pantalla de
-# escritorio típica). Los filtros de arriba se fuerzan al mismo ancho para
-# que quede todo alineado.
+# escritorio típica). Los filtros de arriba se fuerzan al mismo ancho (o la
+# mitad, para el de semana) para que quede todo alineado.
 TABLE_WIDTH_PX = 620
+TABLE_FONT_PX = 12
 
 
 def _icono(valor):
@@ -48,14 +50,18 @@ def _celda(valor, foto_url):
     return icono
 
 
-def _tabla_html(tabla) -> str:
-    """Tabla HTML propia: header combinado (día arriba, Inicio/Fin abajo,
-    como celda unida), todo centrado, y las ✅ con foto son un link directo
-    al reporte de Datascope. El widget nativo de Streamlit no permite nada
-    de esto.
+def _tabla_html(tabla, semana_inicio) -> str:
+    """Tabla HTML propia: header combinado (día arriba, con su número de
+    día del mes -- ej. "Lun 17" -- e Inicio/Fin abajo, como celda unida),
+    todo centrado, y las ✅ con foto son un link directo al reporte de
+    Datascope. El widget nativo de Streamlit no permite nada de esto.
     """
     dias = queries.DIAS_SEMANA
-    head_dias = "".join(f'<th colspan="2">{d}</th>' for d in dias)
+    etiquetas_dias = [
+        f"{etiqueta} {(semana_inicio + timedelta(days=i)).day}"
+        for i, etiqueta in enumerate(dias)
+    ]
+    head_dias = "".join(f'<th colspan="2">{d}</th>' for d in etiquetas_dias)
     head_sub = "".join("<th>I</th><th>F</th>" for _ in dias)
 
     filas_html = []
@@ -129,12 +135,28 @@ def render_inspecciones():
     st.caption("Por cada día, si se hizo el checklist de Inicio y el de Fin de jornada (por separado). "
                "Clic en un ✅ para ver la foto del reporte.")
 
-    # Fuerza los widgets de Semana y Patentes al mismo ancho que la tabla.
+    # Semana: la mitad del ancho de la tabla, con letra proporcional a la de
+    # la tabla. Patentes: mismo ancho que la tabla, con etiquetas cortas y
+    # altura acotada para que se vea como un desplegable, no una lista larga.
     st.markdown(
         f"""
         <style>
-          div[data-testid="stSelectbox"], div[data-testid="stMultiSelect"] {{
+          div[data-testid="stSelectbox"] {{
+            max-width: {TABLE_WIDTH_PX // 2}px;
+          }}
+          div[data-testid="stSelectbox"] .react-aria-ComboBox,
+          div[data-testid="stSelectbox"] .react-aria-ComboBox * {{
+            font-size: {TABLE_FONT_PX}px !important;
+          }}
+          div[data-testid="stMultiSelect"] {{
             max-width: {TABLE_WIDTH_PX}px;
+          }}
+          div[data-testid="stMultiSelect"] .react-aria-ComboBox {{
+            max-height: 90px;
+            overflow-y: auto;
+          }}
+          div[data-testid="stMultiSelect"] .react-aria-ComboBox * {{
+            font-size: {TABLE_FONT_PX}px !important;
           }}
         </style>
         """,
@@ -154,7 +176,7 @@ def render_inspecciones():
         "Patentes",
         options=todas_patentes["patente"].tolist(),
         default=default_patentes,
-        format_func=lambda p: f"{p} ({nombre_por_patente.get(p, '?')})",
+        format_func=lambda p: nombre_por_patente.get(p, p),
         key="patentes_inspecciones",
     )
 
@@ -172,7 +194,7 @@ def render_inspecciones():
         return
 
     tabla = diaria.merge(semanal, on="patente", how="left")
-    st.html(_tabla_html(tabla))
+    st.html(_tabla_html(tabla, semana_inicio))
 
     total_realizados = tabla["realizados"].sum()
     total_esperados = tabla["esperados"].sum()
