@@ -32,6 +32,21 @@ mantenimiento_registros = Table(
     Column("synced_at", DateTime),
 )
 
+# "R-PR02-04 Reporte Faenas en Terreno" y "Reporte Faenas en Terreno Vitacura
+# ECC" -- indican si el camión efectivamente trabajó ese día (se usa para
+# saber si corresponde exigirle inspección diaria de Inicio/Fin, o si
+# corresponde "N/A" porque el camión no salió a trabajar).
+faenas_registros = Table(
+    "faenas_registros",
+    metadata,
+    Column("form_answer_id", Integer, primary_key=True),
+    Column("form_id", Integer),
+    Column("patente", String(20), index=True),
+    Column("fecha_reporte", String(30)),
+    Column("created_at", String(40)),
+    Column("synced_at", DateTime),
+)
+
 flota = Table(
     "flota",
     metadata,
@@ -39,6 +54,7 @@ flota = Table(
     Column("alias", String(120)),
     Column("familia", String(30)),
     Column("orden", Integer),
+    Column("nombre_override", String(60)),
     Column("activo", Boolean, default=True),
 )
 
@@ -54,35 +70,33 @@ def init_db(engine=None):
     return engine
 
 
-def upsert_registros(engine, registros: list[dict], synced_at):
-    """Inserta o actualiza registros de mantenimiento (idempotente por
-    form_answer_id). Funciona tanto en SQLite como en Postgres.
+def _upsert(engine, table, filas: list[dict], pk_col: str):
+    """Inserta o actualiza filas de forma idempotente por `pk_col`. Funciona
+    tanto en SQLite como en Postgres.
     """
-    if not registros:
+    if not filas:
         return
     insert_fn = pg_insert if engine.dialect.name == "postgresql" else sqlite_insert
     with engine.begin() as conn:
-        for r in registros:
-            row = {**r, "synced_at": synced_at}
-            stmt = insert_fn(mantenimiento_registros).values(**row)
-            update_cols = {c.name: row[c.name] for c in mantenimiento_registros.columns
-                           if c.name != "form_answer_id"}
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["form_answer_id"], set_=update_cols
-            )
+        for fila in filas:
+            stmt = insert_fn(table).values(**fila)
+            update_cols = {k: v for k, v in fila.items() if k != pk_col}
+            stmt = stmt.on_conflict_do_update(index_elements=[pk_col], set_=update_cols)
             conn.execute(stmt)
+
+
+def upsert_registros(engine, registros: list[dict], synced_at):
+    """Inserta o actualiza registros de mantenimiento/inspección."""
+    filas = [{**r, "synced_at": synced_at} for r in registros]
+    _upsert(engine, mantenimiento_registros, filas, "form_answer_id")
+
+
+def upsert_faenas(engine, faenas: list[dict], synced_at):
+    """Inserta o actualiza registros de Reporte de Faenas en Terreno."""
+    filas = [{**f, "synced_at": synced_at} for f in faenas]
+    _upsert(engine, faenas_registros, filas, "form_answer_id")
 
 
 def upsert_flota(engine, camiones: list[dict]):
-    """Inserta o actualiza el maestro de flota (idempotente por patente)."""
-    if not camiones:
-        return
-    insert_fn = pg_insert if engine.dialect.name == "postgresql" else sqlite_insert
-    with engine.begin() as conn:
-        for c in camiones:
-            stmt = insert_fn(flota).values(**c)
-            update_cols = {k: v for k, v in c.items() if k != "patente"}
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["patente"], set_=update_cols
-            )
-            conn.execute(stmt)
+    """Inserta o actualiza el maestro de flota."""
+    _upsert(engine, flota, camiones, "patente")

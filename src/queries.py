@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from sqlalchemy import select
 
-from src.db import mantenimiento_registros, flota
+from src.db import mantenimiento_registros, faenas_registros, flota
 
 FECHA_FORMATOS = ["%d-%m-%Y %H:%M", "%d-%m-%Y"]
 
@@ -49,9 +49,29 @@ def _load_flota_activa(engine) -> pd.DataFrame:
     if not df.empty:
         # Nombre corto (ej. "Camel 1", "Scania 2") para no ocupar tanto
         # espacio en la tabla -- numera dentro de cada familia, respetando
-        # el orden ya definido por la columna `orden`.
+        # el orden ya definido por la columna `orden`. `nombre_override` (si
+        # está definido) manda por sobre el nombre calculado.
         df["nombre_corto"] = df["familia"] + " " + (df.groupby("familia").cumcount() + 1).astype(str)
+        tiene_override = df["nombre_override"].notna() & (df["nombre_override"].str.strip() != "")
+        df.loc[tiene_override, "nombre_corto"] = df.loc[tiene_override, "nombre_override"]
     return df
+
+
+def _set_trabajo(engine, lunes, domingo) -> set:
+    """Set de (patente, fecha) para los que hay Reporte de Faenas en
+    Terreno (indica que el camión salió a trabajar ese día) en el rango
+    [lunes, domingo]. Se usa un set en vez de filtrar un DataFrame para no
+    repetir el bug de pandas de perder columnas al filtrar vacíos.
+    """
+    stmt = select(faenas_registros)
+    with engine.connect() as conn:
+        df = pd.read_sql(stmt, conn)
+    resultado = set()
+    for _, r in df.iterrows():
+        d = _parse_fecha(r["fecha_reporte"])
+        if d is not None and lunes <= d.date() <= domingo:
+            resultado.add((r["patente"], d.date()))
+    return resultado
 
 
 DIAS_SEMANA = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
@@ -76,9 +96,13 @@ def opciones_semana(hoy: datetime | None = None, n_semanas: int = 10) -> list[tu
 
 def matriz_cumplimiento_diario(engine, semana_inicio=None, hoy: datetime | None = None) -> pd.DataFrame:
     """Matriz camión x día: una fila por camión, dos columnas por día de la
-    semana (lunes a domingo) -- "{Día} Inicio" y "{Día} Fin". El valor es
-    True/False según si se hizo ese checklist puntual ese día, y None si el
-    día todavía no ha ocurrido (no aplica).
+    semana (lunes a domingo) -- "{Día} Inicio" y "{Día} Fin".
+
+    El valor es:
+    - None si el día todavía no ha ocurrido (no aplica).
+    - "N/A" si el camión no registra Reporte de Faenas en Terreno ese día
+      (no salió a trabajar, así que no corresponde exigirle inspección).
+    - True/False según si se hizo ese checklist puntual ese día.
     """
     hoy = hoy or datetime.now()
     lunes = semana_inicio or (hoy - timedelta(days=hoy.weekday())).date()
@@ -93,6 +117,7 @@ def matriz_cumplimiento_diario(engine, semana_inicio=None, hoy: datetime | None 
         registros = registros[registros["fecha_inicio_dt"].apply(
             lambda d: d is not None and lunes <= d.date() <= dias[-1]
         )]
+    trabajo_set = _set_trabajo(engine, lunes, dias[-1])
 
     filas = []
     for _, camion in flota_df.iterrows():
@@ -103,6 +128,10 @@ def matriz_cumplimiento_diario(engine, semana_inicio=None, hoy: datetime | None 
             if dia > hoy_date:
                 fila[col_inicio] = None  # día futuro, no aplica todavía
                 fila[col_fin] = None
+                continue
+            if (camion["patente"], dia) not in trabajo_set:
+                fila[col_inicio] = "N/A"  # no trabajó ese día
+                fila[col_fin] = "N/A"
                 continue
             if del_camion.empty:
                 fila[col_inicio] = False

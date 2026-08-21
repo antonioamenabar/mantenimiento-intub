@@ -26,6 +26,12 @@ BASE_URL = "https://www.mydatascope.com/api/external"
 # acotado (ej. por semana) y concatenar, no en un solo llamado grande.
 DEFAULT_LOOKBACK_DAYS = 21
 
+# "R-PR02-04 Reporte Faenas en Terreno" y "Reporte Faenas en Terreno
+# Vitacura ECC" -- indican si el camión efectivamente salió a trabajar ese
+# día. Se usan para saber si corresponde exigir inspección diaria de
+# Inicio/Fin (si no trabajó ese día, no aplica -> "N/A").
+FAENAS_FORM_IDS = [522460, 704423]
+
 
 def fetch_form_answers(form_id: int, start: str | None = None, end: str | None = None) -> list[dict]:
     """Trae las respuestas (submissions) de un formulario dado.
@@ -70,13 +76,19 @@ def _get_answer_value(submission: dict, question_name: str):
     return values
 
 
+def _extract_patente(submission: dict) -> str | None:
+    """El campo "Patente" viene como "TWRD42 | CM42" (patente | código
+    interno de Datascope) -- nos quedamos solo con la patente.
+    """
+    patente_raw = _get_answer_value(submission, "Patente") or ""
+    return patente_raw.split("|")[0].strip() if patente_raw else None
+
+
 def normalize_submission(submission: dict) -> dict:
     """Convierte una submission cruda de Datascope en un registro plano,
     listo para guardar en la tabla `mantenimiento_registros`.
     """
-    patente_raw = _get_answer_value(submission, "Patente") or ""
-    # El valor viene como "TWRD42 | CM42" (patente | código interno)
-    patente = patente_raw.split("|")[0].strip() if patente_raw else None
+    patente = _extract_patente(submission)
 
     sistemas = _get_answer_value(submission, "Sistemas Trabajados")
     if sistemas is not None and not isinstance(sistemas, list):
@@ -119,3 +131,27 @@ def fetch_normalized_registros(
     form_id = form_id or config.DATASCOPE_FORM_ID
     raw = fetch_form_answers(form_id, start=start, end=end)
     return [normalize_submission(s) for s in raw]
+
+
+def normalize_faena(submission: dict) -> dict:
+    """Convierte una submission de "Reporte Faenas en Terreno" en un
+    registro plano, listo para guardar en la tabla `faenas_registros`.
+    """
+    return {
+        "form_answer_id": submission.get("form_answer_id"),
+        "form_id": submission.get("form_id"),
+        "patente": _extract_patente(submission),
+        "fecha_reporte": _get_answer_value(submission, "Fecha de Reporte"),
+        "created_at": submission.get("created_at"),
+    }
+
+
+def fetch_normalized_faenas(start: str | None = None, end: str | None = None) -> list[dict]:
+    """Trae y normaliza las submissions de ambos formularios de Reporte de
+    Faenas en Terreno (indican si el camión salió a trabajar ese día).
+    """
+    resultado = []
+    for form_id in FAENAS_FORM_IDS:
+        raw = fetch_form_answers(form_id, start=start, end=end)
+        resultado.extend(normalize_faena(s) for s in raw)
+    return resultado

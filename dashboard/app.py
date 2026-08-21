@@ -22,6 +22,8 @@ engine = db.get_engine()
 def _icono(valor):
     if valor is None:
         return "—"
+    if valor == "N/A":
+        return "N/A"
     return "✅" if valor else "❌"
 
 
