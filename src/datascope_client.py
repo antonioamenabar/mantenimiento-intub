@@ -155,3 +155,56 @@ def fetch_normalized_faenas(start: str | None = None, end: str | None = None) ->
         raw = fetch_form_answers(form_id, start=start, end=end)
         resultado.extend(normalize_faena(s) for s in raw)
     return resultado
+
+
+# Los Tickets (menú "Tickets" en la web de Datascope) se llaman "findings"
+# en la API. El rango start/end tiene un máximo de 90 días por llamada.
+TICKETS_LOOKBACK_DAYS = 90
+
+
+def fetch_tickets(start: str | None = None, end: str | None = None, status: str | None = None) -> list[dict]:
+    """Trae los tickets de fallas. `start`/`end` en formato "DD-MM-YYYY"."""
+    if start is None:
+        start = (date.today() - timedelta(days=TICKETS_LOOKBACK_DAYS)).strftime("%d-%m-%Y")
+    if end is None:
+        end = date.today().strftime("%d-%m-%Y")
+
+    params = {"start": start, "end": end}
+    if status:
+        params["status"] = status
+
+    resp = requests.get(
+        f"{BASE_URL}/findings/list",
+        headers={"Authorization": config.DATASCOPE_API_KEY},
+        params=params,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json() or []
+
+
+def normalize_ticket(t: dict) -> dict:
+    """Convierte un ticket crudo de Datascope en un registro plano, listo
+    para guardar en la tabla `tickets`. El camión asociado viene en
+    `asset_name` (no en un campo "Patente" como en los formularios).
+    """
+    return {
+        "id": t.get("id"),
+        "code": t.get("code"),
+        "name": t.get("name"),
+        "description": t.get("description"),
+        "status": t.get("status"),
+        "priority": t.get("priority"),
+        "patente": t.get("asset_name"),
+        "asset_identifier": t.get("asset_identifier"),
+        "creation_date": t.get("creation_date"),
+        "expiration_date": t.get("expiration_date"),
+        "closure_date": t.get("closure_date"),
+        "closure_message": t.get("closure_message"),
+        "creator_name": t.get("creator_name"),
+    }
+
+
+def fetch_normalized_tickets(start: str | None = None, end: str | None = None) -> list[dict]:
+    raw = fetch_tickets(start=start, end=end)
+    return [normalize_ticket(t) for t in raw]

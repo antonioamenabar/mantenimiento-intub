@@ -47,6 +47,26 @@ faenas_registros = Table(
     Column("synced_at", DateTime),
 )
 
+# Tickets de fallas (menú "Tickets" en Datascope, endpoint /findings/list).
+tickets = Table(
+    "tickets",
+    metadata,
+    Column("id", String(64), primary_key=True),
+    Column("code", Integer),
+    Column("name", String(255)),
+    Column("description", Text),
+    Column("status", String(30), index=True),
+    Column("priority", String(20), index=True),
+    Column("patente", String(20), index=True),
+    Column("asset_identifier", String(20)),
+    Column("creation_date", String(40)),
+    Column("expiration_date", String(40)),
+    Column("closure_date", String(40)),
+    Column("closure_message", Text),
+    Column("creator_name", String(120)),
+    Column("synced_at", DateTime),
+)
+
 flota = Table(
     "flota",
     metadata,
@@ -100,3 +120,9 @@ def upsert_faenas(engine, faenas: list[dict], synced_at):
 def upsert_flota(engine, camiones: list[dict]):
     """Inserta o actualiza el maestro de flota."""
     _upsert(engine, flota, camiones, "patente")
+
+
+def upsert_tickets(engine, filas_tickets: list[dict], synced_at):
+    """Inserta o actualiza tickets de fallas."""
+    filas = [{**t, "synced_at": synced_at} for t in filas_tickets]
+    _upsert(engine, tickets, filas, "id")

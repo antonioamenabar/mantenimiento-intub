@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from sqlalchemy import select
 
-from src.db import mantenimiento_registros, faenas_registros, flota
+from src.db import mantenimiento_registros, faenas_registros, tickets, flota
 
 FECHA_FORMATOS = ["%d-%m-%Y %H:%M", "%d-%m-%Y"]
 
@@ -242,3 +242,41 @@ def semanal_ultimas_semanas_cerradas(
             "inspeccion_semanal_2_sem": cumplida,
         })
     return pd.DataFrame(resultado)
+
+
+# --- Cuadrante de Fallas (Tickets de Datascope, menú "Tickets" / API "findings") ---
+
+PRIORIDADES = ["critical", "high", "medium", "low"]
+PRIORIDAD_LABEL = {"critical": "Crítica", "high": "Alta", "medium": "Media", "low": "Baja"}
+
+
+def _load_tickets(engine) -> pd.DataFrame:
+    stmt = select(tickets)
+    with engine.connect() as conn:
+        df = pd.read_sql(stmt, conn)
+    if df.empty:
+        columnas = [c.name for c in tickets.columns]
+        return pd.DataFrame(columns=columnas)
+    return df
+
+
+def matriz_fallas(engine, patentes: list[str] | None = None) -> pd.DataFrame:
+    """Matriz camión x prioridad: una fila por camión, una columna por cada
+    prioridad (Crítica, Alta, Media, Baja, en ese orden) con la cantidad de
+    tickets de esa prioridad, y una columna final con el total.
+    """
+    flota_df = _load_flota(engine, patentes)
+    tickets_df = _load_tickets(engine)
+
+    filas = []
+    for _, camion in flota_df.iterrows():
+        del_camion = tickets_df[tickets_df["patente"] == camion["patente"]] if not tickets_df.empty else tickets_df
+        fila = {"patente": camion["patente"], "alias": camion["alias"], "nombre_corto": camion["nombre_corto"]}
+        total = 0
+        for p in PRIORIDADES:
+            n = int((del_camion["priority"] == p).sum()) if not del_camion.empty else 0
+            fila[PRIORIDAD_LABEL[p]] = n
+            total += n
+        fila["Total"] = total
+        filas.append(fila)
+    return pd.DataFrame(filas)

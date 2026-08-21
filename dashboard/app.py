@@ -127,6 +127,86 @@ def _tabla_html(tabla, semana_inicio) -> str:
     """
 
 
+def _tabla_fallas_html(tabla) -> str:
+    """Tabla HTML propia para Fallas: Patente, Camión, Crítica/Alta/Media/Baja
+    y Total, con las columnas de prioridad coloreadas por severidad.
+    """
+    color = {"Crítica": "#d32f2f", "Alta": "#f57c00", "Media": "#fbc02d", "Baja": "#388e3c"}
+    cols_prioridad = list(queries.PRIORIDAD_LABEL.values())
+
+    filas_html = []
+    for _, row in tabla.iterrows():
+        celdas = "".join(f"<td class='dia'>{row[c]}</td>" for c in cols_prioridad)
+        filas_html.append(
+            "<tr>"
+            f"<td class='patente'>{row['patente']}</td>"
+            f"<td class='nombre'>{row['nombre_corto']}</td>"
+            f"{celdas}"
+            f"<td class='dia total'>{row['Total']}</td>"
+            "</tr>"
+        )
+
+    head_prioridad = "".join(
+        f"<th style='color:{color[c]}'>{c}</th>" for c in cols_prioridad
+    )
+
+    return f"""
+    <style>
+      .tabla-fallas {{
+        border-collapse: collapse; font-size: 12px; width: {TABLE_WIDTH_PX}px;
+      }}
+      .tabla-fallas th, .tabla-fallas td {{
+        border: 1px solid rgba(128,128,128,0.35);
+        padding: 3px 6px;
+        text-align: center;
+        white-space: nowrap;
+        box-sizing: border-box;
+      }}
+      .tabla-fallas td.dia {{ width: 60px; }}
+      .tabla-fallas td.total {{ font-weight: 600; }}
+      .tabla-fallas td.nombre, .tabla-fallas td.patente {{ text-align: left; font-weight: 500; }}
+      .tabla-fallas td.patente {{ opacity: 0.7; font-size: 11px; width: 62px; }}
+      .tabla-fallas td.nombre {{ width: 88px; }}
+      .tabla-fallas thead th {{ background: rgba(128,128,128,0.12); font-size: 11px; font-weight: 700; }}
+    </style>
+    <table class="tabla-fallas">
+      <thead>
+        <tr>
+          <th>Patente</th>
+          <th>Camión</th>
+          {head_prioridad}
+          <th>Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {"".join(filas_html)}
+      </tbody>
+    </table>
+    """
+
+
+def render_fallas():
+    tooltip = ("Cantidad de tickets de fallas por camión, según prioridad, de los últimos "
+               "90 días (menú Tickets de Datascope).")
+    st.markdown(
+        f"<h4 title='{tooltip}' style='margin:4px 0 6px 0; text-align:left; font-weight:600; "
+        f"font-size:15px; cursor:help;'>⚠️ Fallas</h4>",
+        unsafe_allow_html=True,
+    )
+
+    todas_patentes = queries.opciones_patentes(engine)
+    default_patentes = todas_patentes.loc[todas_patentes["activo"], "patente"].tolist()
+    tabla = queries.matriz_fallas(engine, patentes=default_patentes)
+
+    if tabla.empty:
+        st.info("No hay camiones seleccionados.")
+        return
+
+    st.html(_tabla_fallas_html(tabla))
+
+    st.caption(f"Total de tickets (todas las prioridades, todos los camiones): **{tabla['Total'].sum()}**")
+
+
 def render_inspecciones():
     tooltip = ("Por cada día, si se hizo el checklist de Inicio y el de Fin de jornada (por separado). "
                "Clic en un ✅ para ver la foto del reporte.")
@@ -218,14 +298,11 @@ def render_inspecciones():
 
 
 render_inspecciones()
-
 st.divider()
-col2, col3, col4 = st.columns(3)
+render_fallas()
+st.divider()
 
-with col2:
-    st.header("⚠️ Fallas")
-    st.info("Próximamente. (Ya identificamos que se registran en el mismo "
-            "formulario R-PR03-01, como 'Mantención Correctiva Base/Terreno'.)")
+col3, col4 = st.columns(2)
 
 with col3:
     st.header("🛠️ Mantenimiento Programado")
