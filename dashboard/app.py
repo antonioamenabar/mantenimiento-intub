@@ -255,38 +255,41 @@ def render_fallas():
     tooltip = ("Cantidad de tickets de fallas ABIERTOS (no cerrados) por camión, según "
                "prioridad. La semana actual se calcula en vivo; las semanas pasadas muestran "
                "la foto guardada el lunes siguiente (menú Tickets de Datascope).")
-    st.markdown(
-        f"<h4 title='{tooltip}' style='margin:4px 0 6px 0; text-align:left; font-weight:600; "
-        f"font-size:15px; cursor:help;'>⚠️ Fallas</h4>",
-        unsafe_allow_html=True,
-    )
 
-    # Mismo st.markdown "vacío" (sin contenido visible) que en Inspecciones,
-    # para que el espacio antes de los filtros quede igual y ambas tablas
-    # arranquen a la misma altura.
+    # Mismo st.markdown "vacío" que en Inspecciones, para que la fila del
+    # título quede a la misma altura en ambos cuadrantes.
     st.markdown("<style></style>", unsafe_allow_html=True)
 
     ANCHO_SEMANA = FALLAS_WIDTH_PX // 2
     ANCHO_PATENTES_BOTON = FALLAS_WIDTH_PX // 2
-    col_semana, col_patentes = st.columns(
-        [ANCHO_SEMANA, ANCHO_PATENTES_BOTON], gap="small",
-        width=ANCHO_SEMANA + ANCHO_PATENTES_BOTON + 16,
+    TITULO_W = 150
+    col_titulo, col_semana, col_patentes = st.columns(
+        [TITULO_W, ANCHO_SEMANA, ANCHO_PATENTES_BOTON], gap="small",
+        vertical_alignment="center",
+        width=TITULO_W + ANCHO_SEMANA + ANCHO_PATENTES_BOTON + 32,
     )
 
+    with col_titulo:
+        st.markdown(
+            f"<h4 title='{tooltip}' style='margin:0; text-align:left; font-weight:600; "
+            f"font-size:15px; cursor:help;'>⚠️ Fallas</h4>",
+            unsafe_allow_html=True,
+        )
+
+    opciones = queries.opciones_semana()
+    todas_patentes = queries.opciones_patentes(engine)
+    default_patentes = todas_patentes.loc[todas_patentes["activo"], "patente"].tolist()
+    nombre_por_patente = dict(zip(todas_patentes["patente"], todas_patentes["nombre_corto"]))
+
     with col_semana:
-        opciones = queries.opciones_semana()
         idx = st.selectbox(
-            "Semana", options=range(len(opciones)), format_func=lambda i: opciones[i][1],
-            key="semana_fallas", width=ANCHO_SEMANA,
+            "Semana", options=range(len(opciones)), format_func=lambda i: f"Semana: {opciones[i][1]}",
+            key="semana_fallas", width=ANCHO_SEMANA, label_visibility="collapsed",
         )
         semana_inicio = opciones[idx][0]
 
     with col_patentes:
-        todas_patentes = queries.opciones_patentes(engine)
-        default_patentes = todas_patentes.loc[todas_patentes["activo"], "patente"].tolist()
-        nombre_por_patente = dict(zip(todas_patentes["patente"], todas_patentes["nombre_corto"]))
         n_sel = len(st.session_state.get("patentes_fallas", default_patentes))
-        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
         with st.popover(f"Patentes ({n_sel}) ▾", width=ANCHO_PATENTES_BOTON):
             patentes_sel = st.multiselect(
                 "Patentes",
@@ -314,20 +317,14 @@ def render_fallas():
     st.caption(
         f"Total de tickets abiertos ({etiqueta_vivo}, todas las prioridades): **{tabla['Total'].sum()}**"
     )
-    if en_vivo:
-        st.caption("Clic en un número para ver el detalle de esos tickets.")
 
 
 def render_inspecciones():
     tooltip = ("Por cada día, si se hizo el checklist de Inicio y el de Fin de jornada (por separado). "
                "Clic en un ✅ para ver la foto del reporte.")
-    st.markdown(
-        f"<h4 title='{tooltip}' style='margin:4px 0 6px 0; text-align:left; font-weight:600; "
-        f"font-size:15px; cursor:help;'>🔍 Inspecciones</h4>",
-        unsafe_allow_html=True,
-    )
 
-    # Letra de los dos filtros proporcional a la de la tabla.
+    # Letra de los filtros proporcional a la de la tabla (aplica a los de
+    # Inspecciones y Fallas por igual, ya que la regla es global).
     st.markdown(
         f"""
         <style>
@@ -343,33 +340,40 @@ def render_inspecciones():
         unsafe_allow_html=True,
     )
 
-    # Columnas dimensionadas al contenido real (no 50/50) para que Patentes
-    # quede pegado a Semana, no repartido a lo ancho de toda la fila.
+    # Título y los dos filtros (mismo ancho entre ellos, y juntos respetan
+    # el ancho de la tabla) en una sola fila.
     ANCHO_SEMANA = TABLE_WIDTH_PX // 2
-    ANCHO_PATENTES_BOTON = 170
-    col_semana, col_patentes = st.columns(
-        [ANCHO_SEMANA, ANCHO_PATENTES_BOTON], gap="small",
-        width=ANCHO_SEMANA + ANCHO_PATENTES_BOTON + 16,
+    ANCHO_PATENTES_BOTON = TABLE_WIDTH_PX // 2
+    TITULO_W = 150
+    col_titulo, col_semana, col_patentes = st.columns(
+        [TITULO_W, ANCHO_SEMANA, ANCHO_PATENTES_BOTON], gap="small",
+        vertical_alignment="center",
+        width=TITULO_W + ANCHO_SEMANA + ANCHO_PATENTES_BOTON + 32,
     )
 
+    with col_titulo:
+        st.markdown(
+            f"<h4 title='{tooltip}' style='margin:0; text-align:left; font-weight:600; "
+            f"font-size:15px; cursor:help;'>🔍 Inspecciones</h4>",
+            unsafe_allow_html=True,
+        )
+
+    opciones = queries.opciones_semana()
+    todas_patentes = queries.opciones_patentes(engine)
+    default_patentes = todas_patentes.loc[todas_patentes["activo"], "patente"].tolist()
+    nombre_por_patente = dict(zip(todas_patentes["patente"], todas_patentes["nombre_corto"]))
+
     with col_semana:
-        opciones = queries.opciones_semana()
         idx = st.selectbox(
-            "Semana", options=range(len(opciones)), format_func=lambda i: opciones[i][1],
-            key="semana_inspecciones", width=ANCHO_SEMANA,
+            "Semana", options=range(len(opciones)), format_func=lambda i: f"Semana: {opciones[i][1]}",
+            key="semana_inspecciones", width=ANCHO_SEMANA, label_visibility="collapsed",
         )
         semana_inicio = opciones[idx][0]
 
     with col_patentes:
-        todas_patentes = queries.opciones_patentes(engine)
-        default_patentes = todas_patentes.loc[todas_patentes["activo"], "patente"].tolist()
-        nombre_por_patente = dict(zip(todas_patentes["patente"], todas_patentes["nombre_corto"]))
         # Botón compacto (como el de Semana) que abre un desplegable con el
         # multiselect real -- así las patentes no quedan siempre visibles.
         n_sel = len(st.session_state.get("patentes_inspecciones", default_patentes))
-        # Semana tiene una etiqueta arriba que el botón del popover no tiene
-        # -- este espacio los deja a la misma altura visual.
-        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
         with st.popover(f"Patentes ({n_sel}) ▾", width=ANCHO_PATENTES_BOTON):
             patentes_sel = st.multiselect(
                 "Patentes",
@@ -410,9 +414,10 @@ def render_inspecciones():
 
 _revisar_query_params_fallas()
 
+GAP_ENTRE_CUADRANTES = 50
 col_inspecciones, col_fallas = st.columns(
-    [TABLE_WIDTH_PX, FALLAS_WIDTH_PX], gap="small",
-    width=TABLE_WIDTH_PX + FALLAS_WIDTH_PX + 16,
+    [TABLE_WIDTH_PX, FALLAS_WIDTH_PX], gap=GAP_ENTRE_CUADRANTES,
+    width=TABLE_WIDTH_PX + FALLAS_WIDTH_PX + GAP_ENTRE_CUADRANTES,
 )
 with col_inspecciones:
     render_inspecciones()
