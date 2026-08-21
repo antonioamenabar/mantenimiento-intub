@@ -14,7 +14,16 @@ import streamlit as st
 from src import db, queries
 
 st.set_page_config(page_title="Dashboard Mantenimiento - Intub", layout="wide")
-st.title("🚛 Dashboard de Mantenimiento")
+
+st.markdown(
+    """
+    <style>
+      .block-container { padding-top: 1rem !important; }
+    </style>
+    <h1 style='text-align:center; margin-top:0;'>🚛 Dashboard de Mantenimiento</h1>
+    """,
+    unsafe_allow_html=True,
+)
 
 engine = db.get_engine()
 
