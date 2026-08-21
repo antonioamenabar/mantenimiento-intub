@@ -70,20 +70,18 @@ tickets = Table(
 # Foto histórica semanal del cuadrante de Fallas -- se llena con
 # src/snapshot_fallas.py, pensado para correr cada lunes 8:00 AM vía Tarea
 # Programada de Windows. Clave compuesta (semana_inicio, patente).
+#
+# `datos_json` guarda el cruce prioridad x antigüedad como JSON (ej.
+# {"Crítica||Menos de 7 días": 2, ..., "Total": 7}) en vez de una columna
+# fija por combinación -- así, si más adelante cambian los rangos de
+# antigüedad o las prioridades, no hay que migrar el esquema de la tabla.
 fallas_historico = Table(
     "fallas_historico",
     metadata,
     Column("semana_inicio", String(10), primary_key=True),  # "YYYY-MM-DD" del lunes
     Column("patente", String(20), primary_key=True),
     Column("nombre_corto", String(60)),
-    Column("critica", Integer),
-    Column("alta", Integer),
-    Column("media", Integer),
-    Column("baja", Integer),
-    Column("menos_7_dias", Integer),
-    Column("entre_8_20_dias", Integer),
-    Column("mas_20_dias", Integer),
-    Column("total", Integer),
+    Column("datos_json", Text),
     Column("snapshot_at", DateTime),
 )
 

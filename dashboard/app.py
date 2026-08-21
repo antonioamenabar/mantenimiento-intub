@@ -35,7 +35,42 @@ TABLE_WIDTH_PX = 620
 TABLE_FONT_PX = 12
 # Ancho de la tabla de Fallas, pensado para quedar al lado de Inspecciones
 # (no debajo), con columnas al mínimo para que quepa todo sin scroll.
-FALLAS_WIDTH_PX = 400
+FALLAS_WIDTH_PX = 460
+
+
+@st.dialog("Detalle de tickets")
+def _dialog_detalle_fallas(patente: str, prioridad_key: str, bucket: str):
+    nombre = queries.opciones_patentes(engine)
+    nombre = dict(zip(nombre["patente"], nombre["nombre_corto"])).get(patente, patente)
+    st.markdown(
+        f"**{nombre}** ({patente}) — {queries.PRIORIDAD_LABEL.get(prioridad_key, prioridad_key)} — {bucket}"
+    )
+    detalle = queries.detalle_fallas(engine, patente, prioridad_key, bucket)
+    if detalle.empty:
+        st.info("No hay tickets en este rango.")
+    else:
+        st.dataframe(detalle, hide_index=True, width="stretch")
+    if st.button("Cerrar"):
+        st.query_params.clear()
+        st.rerun()
+
+
+def _revisar_query_params_fallas():
+    """Si la URL tiene ?falla_detalle=PATENTE|PRIORIDAD|CLAVE_ANTIGUEDAD (por
+    haber hecho clic en un número de la tabla de Fallas), abre el popup con
+    el detalle. Clic en la tabla = cambio de query param = rerun de
+    Streamlit, sin abrir pestaña ni ventana nueva.
+    """
+    valor = st.query_params.get("falla_detalle")
+    if not valor:
+        return
+    try:
+        patente, prioridad_key, bucket_key = valor.split("|")
+        bucket = queries.ANTIGUEDAD_KEY_INV[bucket_key]
+    except (ValueError, KeyError):
+        st.query_params.clear()
+        return
+    _dialog_detalle_fallas(patente, prioridad_key, bucket)
 
 
 def _icono(valor):
@@ -130,36 +165,51 @@ def _tabla_html(tabla, semana_inicio) -> str:
     """
 
 
-def _tabla_fallas_html(tabla) -> str:
-    """Tabla HTML propia para Fallas: Patente, Camión, Crítica/Alta/Media/Baja,
-    antigüedad (3 rangos) y Total, con las columnas de prioridad coloreadas
-    por severidad. Columnas al mínimo para que quepa al lado de Inspecciones.
+_COLOR_PRIORIDAD = {"Crítica": "#d32f2f", "Alta": "#f57c00", "Media": "#fbc02d", "Baja": "#388e3c"}
+_PRIORIDAD_LABEL_A_KEY = {v: k for k, v in queries.PRIORIDAD_LABEL.items()}
+_ANTIGUEDAD_CORTO = {"Menos de 7 días": "<7", "Entre 8 y 21 días": "8-21", "Más de 21 días": ">21"}
+
+
+def _celda_fallas(valor: int, patente: str, prioridad_label: str, bucket: str, clickeable: bool) -> str:
+    if valor and clickeable:
+        prioridad_key = _PRIORIDAD_LABEL_A_KEY[prioridad_label]
+        bucket_key = queries.ANTIGUEDAD_KEY[bucket]
+        href = f"?falla_detalle={patente}|{prioridad_key}|{bucket_key}"
+        return f'<a href="{href}" title="Ver detalle">{valor}</a>'
+    return str(valor)
+
+
+def _tabla_fallas_html(tabla, en_vivo: bool) -> str:
+    """Tabla HTML propia para Fallas: Patente, Camión, y para cada prioridad
+    (Crítica/Alta/Media/Baja) 3 columnas de antigüedad (<7 / 8-21 / >21
+    días), más el Total. Los números > 0 son un link que abre el detalle en
+    un popup (st.dialog) -- solo si `en_vivo` (el histórico no guarda
+    detalle ticket a ticket).
     """
-    color = {"Crítica": "#d32f2f", "Alta": "#f57c00", "Media": "#fbc02d", "Baja": "#388e3c"}
     cols_prioridad = list(queries.PRIORIDAD_LABEL.values())
     cols_antiguedad = queries.ANTIGUEDAD_BUCKETS
-    head_antiguedad_corto = {
-        "Menos de 7 días": "<7 días",
-        "Entre 8 y 20 días": "8-20 días",
-        "Más de 20 días": ">20 días",
-    }
 
     filas_html = []
     for _, row in tabla.iterrows():
-        celdas_prio = "".join(f"<td class='num'>{row[c]}</td>" for c in cols_prioridad)
-        celdas_edad = "".join(f"<td class='num'>{row[c]}</td>" for c in cols_antiguedad)
+        celdas = "".join(
+            f"<td class='num'>{_celda_fallas(row[queries._col_cruzada(p, b)], row['patente'], p, b, en_vivo)}</td>"
+            for p in cols_prioridad for b in cols_antiguedad
+        )
         filas_html.append(
             "<tr>"
             f"<td class='patente'>{row['patente']}</td>"
             f"<td class='nombre'>{row['nombre_corto']}</td>"
-            f"{celdas_prio}"
-            f"{celdas_edad}"
+            f"{celdas}"
             f"<td class='num total'>{row['Total']}</td>"
             "</tr>"
         )
 
-    head_prioridad = "".join(f"<th style='color:{color[c]}'>{c}</th>" for c in cols_prioridad)
-    head_antiguedad = "".join(f"<th>{head_antiguedad_corto[c]}</th>" for c in cols_antiguedad)
+    head_prioridad = "".join(
+        f"<th colspan='3' style='color:{_COLOR_PRIORIDAD[p]}'>{p}</th>" for p in cols_prioridad
+    )
+    head_antiguedad = "".join(
+        f"<th>{_ANTIGUEDAD_CORTO[b]}</th>" for _ in cols_prioridad for b in cols_antiguedad
+    )
 
     return f"""
     <style>
@@ -174,25 +224,25 @@ def _tabla_fallas_html(tabla) -> str:
         line-height: 1.2;
         box-sizing: border-box;
       }}
-      .tabla-fallas td.num {{ width: 26px; }}
+      .tabla-fallas td.num {{ width: 21px; }}
       .tabla-fallas td.total {{ font-weight: 600; }}
       .tabla-fallas td.nombre, .tabla-fallas td.patente {{ text-align: left; font-weight: 500; }}
       .tabla-fallas td.patente {{ opacity: 0.7; font-size: 11px; width: 46px; }}
       .tabla-fallas td.nombre {{ width: 62px; }}
+      .tabla-fallas a {{ text-decoration: none; font-weight: 600; }}
       .tabla-fallas thead th {{
         background: rgba(128,128,128,0.12); font-size: 10px; font-weight: 700;
-        padding-top: 10px; padding-bottom: 11px;
       }}
     </style>
     <table class="tabla-fallas">
       <thead>
         <tr>
-          <th>Patente</th>
-          <th>Camión</th>
+          <th rowspan="2">Patente</th>
+          <th rowspan="2">Camión</th>
           {head_prioridad}
-          {head_antiguedad}
-          <th>Total</th>
+          <th rowspan="2">Total</th>
         </tr>
+        <tr>{head_antiguedad}</tr>
       </thead>
       <tbody>
         {"".join(filas_html)}
@@ -258,12 +308,14 @@ def render_fallas():
                 "(se guarda automáticamente el lunes siguiente a las 8:00 AM).")
         return
 
-    st.html(_tabla_fallas_html(tabla))
+    st.html(_tabla_fallas_html(tabla, en_vivo))
 
     etiqueta_vivo = "en vivo" if en_vivo else "foto del lunes"
     st.caption(
         f"Total de tickets abiertos ({etiqueta_vivo}, todas las prioridades): **{tabla['Total'].sum()}**"
     )
+    if en_vivo:
+        st.caption("Clic en un número para ver el detalle de esos tickets.")
 
 
 def render_inspecciones():
@@ -355,6 +407,8 @@ def render_inspecciones():
     else:
         st.caption("Sin checklists esperados en esta semana para los camiones seleccionados.")
 
+
+_revisar_query_params_fallas()
 
 col_inspecciones, col_fallas = st.columns(
     [TABLE_WIDTH_PX, FALLAS_WIDTH_PX], gap="small",

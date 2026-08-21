@@ -40,14 +40,7 @@ def main():
             "semana_inicio": semana_cerrada.strftime("%Y-%m-%d"),
             "patente": row["patente"],
             "nombre_corto": row["nombre_corto"],
-            "critica": int(row["Crítica"]),
-            "alta": int(row["Alta"]),
-            "media": int(row["Media"]),
-            "baja": int(row["Baja"]),
-            "menos_7_dias": int(row["Menos de 7 días"]),
-            "entre_8_20_dias": int(row["Entre 8 y 20 días"]),
-            "mas_20_dias": int(row["Más de 20 días"]),
-            "total": int(row["Total"]),
+            "datos_json": queries.fila_fallas_a_json(row),
         })
 
     db.upsert_fallas_historico(engine, filas, snapshot_at=datetime.now(timezone.utc))

@@ -1,6 +1,7 @@
 """Consultas de negocio para el cuadrante de Inspecciones:
 cumplimiento diario (inicio/fin de jornada) y semanal, por camión.
 """
+import json
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -249,7 +250,12 @@ def semanal_ultimas_semanas_cerradas(
 PRIORIDADES = ["critical", "high", "medium", "low"]
 PRIORIDAD_LABEL = {"critical": "Crítica", "high": "Alta", "medium": "Media", "low": "Baja"}
 
-ANTIGUEDAD_BUCKETS = ["Menos de 7 días", "Entre 8 y 20 días", "Más de 20 días"]
+ANTIGUEDAD_BUCKETS = ["Menos de 7 días", "Entre 8 y 21 días", "Más de 21 días"]
+# Claves cortas, sin tildes ni espacios, para armar los query params del link
+# clickeable de cada celda (patente/prioridad/antigüedad no deberían tener
+# caracteres raros en una URL).
+ANTIGUEDAD_KEY = {"Menos de 7 días": "menos7", "Entre 8 y 21 días": "8-21", "Más de 21 días": "mas21"}
+ANTIGUEDAD_KEY_INV = {v: k for k, v in ANTIGUEDAD_KEY.items()}
 
 
 def _dias_antiguedad(creation_date_str, hoy: datetime | None = None):
@@ -268,9 +274,15 @@ def _bucket_antiguedad(dias) -> str | None:
         return None
     if dias < 7:
         return "Menos de 7 días"
-    if dias <= 20:
-        return "Entre 8 y 20 días"
-    return "Más de 20 días"
+    if dias <= 21:
+        return "Entre 8 y 21 días"
+    return "Más de 21 días"
+
+
+def _col_cruzada(prioridad_label: str, bucket: str) -> str:
+    """Nombre de columna para el cruce prioridad x antigüedad, ej.
+    'Crítica||Menos de 7 días'."""
+    return f"{prioridad_label}||{bucket}"
 
 
 def _load_tickets(engine) -> pd.DataFrame:
@@ -284,9 +296,10 @@ def _load_tickets(engine) -> pd.DataFrame:
 
 
 def matriz_fallas(engine, patentes: list[str] | None = None) -> pd.DataFrame:
-    """Matriz camión x prioridad: una fila por camión, una columna por cada
-    prioridad (Crítica, Alta, Media, Baja, en ese orden) con la cantidad de
-    tickets de esa prioridad, y una columna final con el total.
+    """Matriz camión x (prioridad x antigüedad): una fila por camión, y para
+    cada prioridad (Crítica, Alta, Media, Baja, en ese orden) tres columnas
+    con la cantidad de tickets según antigüedad (Menos de 7 días / Entre 8 y
+    21 días / Más de 21 días), más una columna final con el total.
     """
     flota_df = _load_flota(engine, patentes)
     tickets_df = _load_tickets(engine)
@@ -295,36 +308,39 @@ def matriz_fallas(engine, patentes: list[str] | None = None) -> pd.DataFrame:
     for _, camion in flota_df.iterrows():
         del_camion = tickets_df[tickets_df["patente"] == camion["patente"]] if not tickets_df.empty else tickets_df
         fila = {"patente": camion["patente"], "alias": camion["alias"], "nombre_corto": camion["nombre_corto"]}
-        total = 0
-        for p in PRIORIDADES:
-            n = int((del_camion["priority"] == p).sum()) if not del_camion.empty else 0
-            fila[PRIORIDAD_LABEL[p]] = n
-            total += n
         if not del_camion.empty:
             buckets = del_camion["creation_date"].apply(lambda d: _bucket_antiguedad(_dias_antiguedad(d)))
         else:
             buckets = pd.Series(dtype="object")
-        for b in ANTIGUEDAD_BUCKETS:
-            fila[b] = int((buckets == b).sum())
+        total = 0
+        for p in PRIORIDADES:
+            label = PRIORIDAD_LABEL[p]
+            es_prioridad = (del_camion["priority"] == p) if not del_camion.empty else pd.Series(dtype="bool")
+            for b in ANTIGUEDAD_BUCKETS:
+                n = int((es_prioridad & (buckets == b)).sum()) if not del_camion.empty else 0
+                fila[_col_cruzada(label, b)] = n
+                total += n
         fila["Total"] = total
         filas.append(fila)
     return pd.DataFrame(filas)
 
 
-# Nombres de columna en fallas_historico -> nombres que usa matriz_fallas()
-# (para que ambas fuentes se puedan mostrar con la misma tabla HTML).
-_HISTORICO_A_MATRIZ = {
-    "critica": "Crítica", "alta": "Alta", "media": "Media", "baja": "Baja",
-    "menos_7_dias": "Menos de 7 días", "entre_8_20_dias": "Entre 8 y 20 días",
-    "mas_20_dias": "Más de 20 días", "total": "Total",
-}
+def fila_fallas_a_json(fila: dict) -> str:
+    """Serializa las columnas de conteo (cruce prioridad x antigüedad + Total)
+    de una fila de matriz_fallas() para guardar en fallas_historico.datos_json.
+    """
+    cols = [_col_cruzada(PRIORIDAD_LABEL[p], b) for p in PRIORIDADES for b in ANTIGUEDAD_BUCKETS] + ["Total"]
+    return json.dumps({c: int(fila[c]) for c in cols}, ensure_ascii=False)
 
 
 def _load_fallas_historico(engine, semana_inicio) -> pd.DataFrame:
     stmt = select(fallas_historico).where(fallas_historico.c.semana_inicio == semana_inicio.strftime("%Y-%m-%d"))
     with engine.connect() as conn:
         df = pd.read_sql(stmt, conn)
-    return df.rename(columns=_HISTORICO_A_MATRIZ)
+    if df.empty:
+        return df
+    datos = df["datos_json"].apply(json.loads).apply(pd.Series)
+    return pd.concat([df[["patente", "nombre_corto"]], datos], axis=1)
 
 
 def matriz_fallas_semana(
@@ -352,3 +368,31 @@ def matriz_fallas_semana(
         orden = {p: i for i, p in enumerate(patentes)}
         df = df.sort_values(by="patente", key=lambda s: s.map(orden)).reset_index(drop=True)
     return df, False
+
+
+def detalle_fallas(engine, patente: str, prioridad_key: str, bucket: str) -> pd.DataFrame:
+    """Lista de tickets (Descripción, Fecha creación) para una celda puntual
+    de la matriz (un camión, una prioridad, un rango de antigüedad). Solo
+    tiene sentido para la semana EN VIVO -- el histórico no guarda el
+    detalle ticket a ticket, solo los conteos.
+    """
+    tickets_df = _load_tickets(engine)
+    if tickets_df.empty:
+        return pd.DataFrame(columns=["Descripción", "Fecha creación"])
+    del_camion = tickets_df[
+        (tickets_df["patente"] == patente) & (tickets_df["priority"] == prioridad_key)
+    ]
+    if del_camion.empty:
+        return pd.DataFrame(columns=["Descripción", "Fecha creación"])
+    buckets = del_camion["creation_date"].apply(lambda d: _bucket_antiguedad(_dias_antiguedad(d)))
+    del_bucket = del_camion[buckets == bucket]
+    if del_bucket.empty:
+        return pd.DataFrame(columns=["Descripción", "Fecha creación"])
+    resultado = del_bucket.apply(
+        lambda r: pd.Series({
+            "Descripción": (r["description"] or r["name"] or "").strip() or "(sin descripción)",
+            "Fecha creación": r["creation_date"],
+        }),
+        axis=1,
+    )
+    return resultado.reset_index(drop=True)
