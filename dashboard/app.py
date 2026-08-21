@@ -38,14 +38,14 @@ TABLE_FONT_PX = 12
 def _icono(valor):
     if valor is None:
         return "—"
-    if valor == "N/A":
-        return "N/A"
+    if valor in ("N/A", "?"):
+        return valor
     return "✅" if valor else "❌"
 
 
 def _celda(valor, foto_url):
     icono = _icono(valor)
-    if valor is True and foto_url:
+    if valor in (True, "?") and foto_url:
         return f'<a href="{foto_url}" target="_blank" title="Ver foto del reporte">{icono}</a>'
     return icono
 

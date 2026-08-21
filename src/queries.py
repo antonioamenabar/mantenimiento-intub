@@ -92,6 +92,28 @@ def _set_trabajo(engine, lunes, domingo) -> set:
 
 DIAS_SEMANA = ["Lun", "Mar", "Mié", "Jue", "Vie"]  # checklist diario solo aplica de lunes a viernes
 
+# --- Verificación manual de fotos (revisión visual hecha el 20-08-2026) ---
+# Se revisaron 31 fotos de la semana 17-08 al 20-08: las 15 de "Inspección
+# Diaria Fin" casi todas corresponden al formulario de papel correcto (con
+# patente y fecha coincidentes), salvo 1 excepción listada abajo. En cambio,
+# de las 16 de "Inspección Diaria Inicio" -- revisando la foto principal de
+# las 16 y el set completo de fotos de 3 de ellas (25 fotos en total) -- NINGUNA
+# corresponde al formulario de papel de Inicio de Faena: todas son fotos de
+# evidencia mecánica (correa, refrigerante, aceite, neumáticos, patente del
+# camión), no el checklist escaneado. Por eso, mientras no se confirme lo
+# contrario, los "Inicio" se muestran como "?" en vez de "✅".
+#
+# OJO: esto es una revisión manual puntual, no una verificación automática.
+# Si se agregan más semanas de datos hay que repetir la revisión a mano, o
+# automatizarla integrando una llamada a un modelo de visión en la
+# sincronización (no está hecho todavía).
+FOTO_INICIO_NO_VERIFICABLE = True
+
+FOTO_EXCEPCIONES_MISMATCH = {
+    # (patente, tipo_mantenimiento, "dd-mm-YYYY"): motivo (documentado, no usado en código)
+    ("TDKR30", "Inspección Diaria Fin", "20-08-2026"): "foto repetida de un reporte del 10-08-2026",
+}
+
 
 def opciones_semana(hoy: datetime | None = None, n_semanas: int = 10) -> list[tuple]:
     """Lista de (lunes, etiqueta) para las últimas `n_semanas`, de la más
@@ -173,8 +195,14 @@ def matriz_cumplimiento_diario(
             reg_inicio = del_dia[del_dia["tipo_mantenimiento"] == TIPO_INICIO]
             reg_fin = del_dia[del_dia["tipo_mantenimiento"] == TIPO_FIN]
             tiene_inicio, tiene_fin = not reg_inicio.empty, not reg_fin.empty
-            fila[col_inicio] = tiene_inicio
-            fila[col_fin] = tiene_fin
+            fecha_str = dia.strftime("%d-%m-%Y")
+            # El checklist SÍ se hizo (cuenta para el % de cumplimiento);
+            # "?" solo indica que la foto adjunta no se pudo verificar.
+            fila[col_inicio] = "?" if tiene_inicio and FOTO_INICIO_NO_VERIFICABLE else tiene_inicio
+            if tiene_fin and (camion["patente"], TIPO_FIN, fecha_str) in FOTO_EXCEPCIONES_MISMATCH:
+                fila[col_fin] = "?"
+            else:
+                fila[col_fin] = tiene_fin
             fila[foto_inicio] = _primera_foto(reg_inicio.iloc[0]["fotos"]) if tiene_inicio else None
             fila[foto_fin] = _primera_foto(reg_fin.iloc[0]["fotos"]) if tiene_fin else None
             realizados += int(tiene_inicio) + int(tiene_fin)
