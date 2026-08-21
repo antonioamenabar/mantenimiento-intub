@@ -208,3 +208,36 @@ def normalize_ticket(t: dict) -> dict:
 def fetch_normalized_tickets(start: str | None = None, end: str | None = None) -> list[dict]:
     raw = fetch_tickets(start=start, end=end)
     return [normalize_ticket(t) for t in raw]
+
+
+# Estados "no cerrado" documentados por la API (en la práctica, en esta
+# cuenta solo se ha visto "open" -- nunca "in_progress" ni "paused" -- pero
+# se consultan los tres por si empiezan a usarse).
+ESTADOS_NO_CERRADOS = ["open", "in_progress", "paused"]
+
+
+def fetch_tickets_no_cerrados(chunk_days: int = 90, max_chunks: int = 20) -> list[dict]:
+    """Trae TODOS los tickets no cerrados de toda la historia de la cuenta,
+    no solo los últimos 90 días -- un ticket abierto hace más de 90 días
+    igual debe contar como pendiente. Como la API limita cada consulta a
+    `chunk_days` días, se pide en bloques hacia atrás en el tiempo hasta que
+    un bloque vuelve vacío (se asume que ahí termina el historial de la
+    cuenta).
+    """
+    vistos = {}
+    for estado in ESTADOS_NO_CERRADOS:
+        fin = date.today()
+        for _ in range(max_chunks):
+            inicio = fin - timedelta(days=chunk_days)
+            raw = fetch_tickets(start=inicio.strftime("%d-%m-%Y"), end=fin.strftime("%d-%m-%Y"), status=estado)
+            if not raw:
+                break
+            for t in raw:
+                vistos[t["id"]] = t
+            fin = inicio - timedelta(days=1)
+    return list(vistos.values())
+
+
+def fetch_normalized_tickets_no_cerrados(chunk_days: int = 90, max_chunks: int = 20) -> list[dict]:
+    raw = fetch_tickets_no_cerrados(chunk_days=chunk_days, max_chunks=max_chunks)
+    return [normalize_ticket(t) for t in raw]

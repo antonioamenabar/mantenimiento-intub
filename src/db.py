@@ -122,7 +122,15 @@ def upsert_flota(engine, camiones: list[dict]):
     _upsert(engine, flota, camiones, "patente")
 
 
-def upsert_tickets(engine, filas_tickets: list[dict], synced_at):
-    """Inserta o actualiza tickets de fallas."""
+def replace_tickets(engine, filas_tickets: list[dict], synced_at):
+    """Reemplaza por completo la tabla de tickets (borra todo y vuelve a
+    insertar). Se usa reemplazo en vez de upsert porque solo se sincronizan
+    los tickets NO cerrados -- si se hiciera upsert, un ticket que se cierra
+    en Datascope nunca se volvería a traer (ya no matchea el filtro) y
+    quedaría "pegado" en la base local mostrando un estado open desactualizado.
+    """
     filas = [{**t, "synced_at": synced_at} for t in filas_tickets]
-    _upsert(engine, tickets, filas, "id")
+    with engine.begin() as conn:
+        conn.execute(tickets.delete())
+        if filas:
+            conn.execute(tickets.insert(), filas)

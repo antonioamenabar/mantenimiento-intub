@@ -27,10 +27,10 @@ def main():
     print(f"  {len(faenas)} registros obtenidos.")
     db.upsert_faenas(engine, faenas, synced_at=ahora)
 
-    print("Conectando a Datascope (Tickets / findings)...")
-    tickets = datascope_client.fetch_normalized_tickets()
+    print("Conectando a Datascope (Tickets / findings, no cerrados, todo el historial)...")
+    tickets = datascope_client.fetch_normalized_tickets_no_cerrados()
     print(f"  {len(tickets)} tickets obtenidos.")
-    db.upsert_tickets(engine, tickets, synced_at=ahora)
+    db.replace_tickets(engine, tickets, synced_at=ahora)
 
     print(f"Sincronización completa -> {config.get_database_url()}")
 

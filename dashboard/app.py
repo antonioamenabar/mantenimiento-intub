@@ -186,8 +186,9 @@ def _tabla_fallas_html(tabla) -> str:
 
 
 def render_fallas():
-    tooltip = ("Cantidad de tickets de fallas por camión, según prioridad, de los últimos "
-               "90 días (menú Tickets de Datascope).")
+    tooltip = ("Cantidad de tickets de fallas ABIERTOS (no cerrados) por camión, según "
+               "prioridad -- de toda la historia de la cuenta, no solo de los últimos días "
+               "(menú Tickets de Datascope).")
     st.markdown(
         f"<h4 title='{tooltip}' style='margin:4px 0 6px 0; text-align:left; font-weight:600; "
         f"font-size:15px; cursor:help;'>⚠️ Fallas</h4>",
@@ -204,7 +205,7 @@ def render_fallas():
 
     st.html(_tabla_fallas_html(tabla))
 
-    st.caption(f"Total de tickets (todas las prioridades, todos los camiones): **{tabla['Total'].sum()}**")
+    st.caption(f"Total de tickets abiertos (todas las prioridades, todos los camiones): **{tabla['Total'].sum()}**")
 
 
 def render_inspecciones():
