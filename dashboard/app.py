@@ -128,33 +128,21 @@ def _tabla_html(tabla, semana_inicio) -> str:
 
 
 def render_inspecciones():
+    tooltip = ("Por cada día, si se hizo el checklist de Inicio y el de Fin de jornada (por separado). "
+               "Clic en un ✅ para ver la foto del reporte.")
     st.markdown(
-        "<h4 style='margin:4px 0 6px 0; text-align:left; font-weight:600; font-size:15px;'>🔍 Inspecciones</h4>",
+        f"<h4 title='{tooltip}' style='margin:4px 0 6px 0; text-align:left; font-weight:600; "
+        f"font-size:15px; cursor:help;'>🔍 Inspecciones</h4>",
         unsafe_allow_html=True,
     )
-    st.caption("Por cada día, si se hizo el checklist de Inicio y el de Fin de jornada (por separado). "
-               "Clic en un ✅ para ver la foto del reporte.")
 
-    # Semana: la mitad del ancho de la tabla, con letra proporcional a la de
-    # la tabla. Patentes: mismo ancho que la tabla, con etiquetas cortas y
-    # altura acotada para que se vea como un desplegable, no una lista larga.
+    # Letra de los dos filtros proporcional a la de la tabla.
     st.markdown(
         f"""
         <style>
-          div[data-testid="stSelectbox"] {{
-            max-width: {TABLE_WIDTH_PX // 2}px;
-          }}
           div[data-testid="stSelectbox"] .react-aria-ComboBox,
-          div[data-testid="stSelectbox"] .react-aria-ComboBox * {{
-            font-size: {TABLE_FONT_PX}px !important;
-          }}
-          div[data-testid="stMultiSelect"] {{
-            max-width: {TABLE_WIDTH_PX}px;
-          }}
-          div[data-testid="stMultiSelect"] .react-aria-ComboBox {{
-            max-height: 90px;
-            overflow-y: auto;
-          }}
+          div[data-testid="stSelectbox"] .react-aria-ComboBox *,
+          div[data-testid="stMultiSelect"] .react-aria-ComboBox,
           div[data-testid="stMultiSelect"] .react-aria-ComboBox * {{
             font-size: {TABLE_FONT_PX}px !important;
           }}
@@ -163,22 +151,29 @@ def render_inspecciones():
         unsafe_allow_html=True,
     )
 
-    opciones = queries.opciones_semana()
-    idx = st.selectbox(
-        "Semana", options=range(len(opciones)), format_func=lambda i: opciones[i][1], key="semana_inspecciones",
-    )
-    semana_inicio = opciones[idx][0]
+    col_semana, col_patentes = st.columns(2)
 
-    todas_patentes = queries.opciones_patentes(engine)
-    default_patentes = todas_patentes.loc[todas_patentes["activo"], "patente"].tolist()
-    nombre_por_patente = dict(zip(todas_patentes["patente"], todas_patentes["nombre_corto"]))
-    patentes_sel = st.multiselect(
-        "Patentes",
-        options=todas_patentes["patente"].tolist(),
-        default=default_patentes,
-        format_func=lambda p: nombre_por_patente.get(p, p),
-        key="patentes_inspecciones",
-    )
+    with col_semana:
+        opciones = queries.opciones_semana()
+        idx = st.selectbox(
+            "Semana", options=range(len(opciones)), format_func=lambda i: opciones[i][1],
+            key="semana_inspecciones", width=TABLE_WIDTH_PX // 2,
+        )
+        semana_inicio = opciones[idx][0]
+
+    with col_patentes:
+        todas_patentes = queries.opciones_patentes(engine)
+        default_patentes = todas_patentes.loc[todas_patentes["activo"], "patente"].tolist()
+        nombre_por_patente = dict(zip(todas_patentes["patente"], todas_patentes["nombre_corto"]))
+        patentes_sel = st.multiselect(
+            "Patentes",
+            options=todas_patentes["patente"].tolist(),
+            default=default_patentes,
+            format_func=lambda p: nombre_por_patente.get(p, p),
+            key="patentes_inspecciones",
+            width=TABLE_WIDTH_PX // 2,
+            wrap=False,  # una sola fila de chips, con scroll horizontal, como el filtro de Semana
+        )
 
     if not patentes_sel:
         st.info("Selecciona al menos una patente.")
