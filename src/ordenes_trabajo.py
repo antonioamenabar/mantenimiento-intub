@@ -101,7 +101,7 @@ def _referencias_asignadas(engine, tipo_item: str, patente: str) -> dict:
         select(ot_items.c.referencia, ordenes_trabajo.c.numero_ot)
         .join(ordenes_trabajo, ordenes_trabajo.c.id == ot_items.c.ot_id)
         .where(ot_items.c.tipo_item == tipo_item)
-        .where(ordenes_trabajo.c.patente == patente)
+        .where(ot_items.c.patente == patente)
         .where(ordenes_trabajo.c.estado == "enviada")
     )
     with engine.connect() as conn:
@@ -200,23 +200,26 @@ def _siguiente_numero_ot(engine) -> str:
     return f"OT-{(maximo or 0) + 1:04d}"
 
 
-def crear_y_enviar_ot(engine, patente: str, asignado_id: int, items: list[dict], creado_por: str) -> dict:
+def crear_y_enviar_ot(
+    engine, fecha_programada, turno: str, asignado_id: int, items: list[dict], creado_por: str,
+) -> dict:
     """Crea la OT con sus ítems y la despacha:
       - si el asignado es un mecánico interno -> queda visible de inmediato
         en "Mis OTs" (no hace falta hacer nada más, es la misma tabla).
       - si es un taller externo -> se le manda un email con el detalle.
     Una sola OT puede traer ítems de Inspección, Fallas y Mantenimiento
-    Programado a la vez -- `tipo_trabajo` es solo un resumen para mostrar
-    (ver `tipo_trabajo_resumen`), no restringe qué se puede combinar.
+    Programado a la vez, de camiones distintos -- cada ítem trae su propia
+    `patente` (ver `tipo_trabajo_resumen` para el resumen de tipo).
     Devuelve {"ot_id", "numero_ot", "email_enviado", "email_error"}.
     """
     ahora = datetime.now()
     numero_ot = _siguiente_numero_ot(engine)
     tipo_trabajo = tipo_trabajo_resumen(items)
+    fecha_str = fecha_programada.strftime("%Y-%m-%d") if hasattr(fecha_programada, "strftime") else str(fecha_programada)
     ot_id = crear_orden_trabajo(engine, {
-        "numero_ot": numero_ot, "patente": patente, "tipo_trabajo": tipo_trabajo,
-        "asignado_id": asignado_id, "estado": "enviada", "creado_por": creado_por,
-        "creado_at": ahora, "enviado_at": ahora,
+        "numero_ot": numero_ot, "patente": None, "fecha_programada": fecha_str, "turno": turno,
+        "tipo_trabajo": tipo_trabajo, "asignado_id": asignado_id, "estado": "enviada",
+        "creado_por": creado_por, "creado_at": ahora, "enviado_at": ahora,
     }, items)
 
     asignado = mecanicos_talleres_activos(engine)
@@ -226,7 +229,7 @@ def crear_y_enviar_ot(engine, patente: str, asignado_id: int, items: list[dict],
     email_enviado, email_error = False, None
     if asignado and asignado["tipo"] == "externo" and asignado.get("contacto"):
         try:
-            _enviar_email_ot(numero_ot, patente, tipo_trabajo, items, asignado["contacto"])
+            _enviar_email_ot(numero_ot, fecha_str, turno, tipo_trabajo, items, asignado["contacto"])
             email_enviado = True
         except Exception as exc:  # noqa: BLE001 -- se muestra el motivo al Jefe, no se rompe la OT
             email_error = str(exc)
@@ -234,7 +237,10 @@ def crear_y_enviar_ot(engine, patente: str, asignado_id: int, items: list[dict],
     return {"ot_id": ot_id, "numero_ot": numero_ot, "email_enviado": email_enviado, "email_error": email_error}
 
 
-def _enviar_email_ot(numero_ot: str, patente: str, tipo_trabajo: str, items: list[dict], destinatario: str):
+TURNO_LABEL = {"diurno": "Diurno", "nocturno": "Nocturno"}
+
+
+def _enviar_email_ot(numero_ot: str, fecha_str: str, turno: str, tipo_trabajo: str, items: list[dict], destinatario: str):
     """Envía la OT por correo a un taller externo, usando las credenciales
     SMTP del archivo .env (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
     SMTP_FROM). Si no están configuradas, lanza un error claro en vez de
@@ -252,16 +258,18 @@ def _enviar_email_ot(numero_ot: str, patente: str, tipo_trabajo: str, items: lis
             "(SMTP_HOST, SMTP_USER, SMTP_PASSWORD) -- la OT quedó creada pero no se pudo enviar el email."
         )
 
-    detalle = "\n".join(f"- {it.get('descripcion') or it.get('referencia')}" for it in items)
+    patentes = sorted({it.get("patente") for it in items if it.get("patente")})
+    detalle = "\n".join(f"- ({it.get('patente', '—')}) {it.get('descripcion') or it.get('referencia')}" for it in items)
     cuerpo = (
         f"Orden de Trabajo {numero_ot}\n"
-        f"Camión: {patente}\n"
+        f"Fecha: {fecha_str} -- Turno: {TURNO_LABEL.get(turno, turno)}\n"
+        f"Camiones: {', '.join(patentes) or '—'}\n"
         f"Tipo de trabajo: {TIPO_TRABAJO_LABEL.get(tipo_trabajo, tipo_trabajo)}\n\n"
         f"Ítems:\n{detalle}\n\n"
         f"-- Enviado automáticamente por el Software de Mantenimiento de Intub."
     )
     mensaje = MIMEText(cuerpo, "plain", "utf-8")
-    mensaje["Subject"] = f"{numero_ot} - {patente} - {TIPO_TRABAJO_LABEL.get(tipo_trabajo, tipo_trabajo)}"
+    mensaje["Subject"] = f"{numero_ot} - {', '.join(patentes) or 'varios'} - {TIPO_TRABAJO_LABEL.get(tipo_trabajo, tipo_trabajo)}"
     mensaje["From"] = remitente
     mensaje["To"] = destinatario
 
@@ -288,6 +296,22 @@ def _cargar_ots(engine, where=None) -> pd.DataFrame:
         stmt = stmt.where(where)
     with engine.connect() as conn:
         df = pd.read_sql(stmt, conn)
+    if df.empty:
+        df["patentes"] = pd.Series(dtype=str)
+        return df
+
+    with engine.connect() as conn:
+        items_df = pd.read_sql(
+            select(ot_items.c.ot_id, ot_items.c.patente).where(ot_items.c.ot_id.in_(df["id"].tolist())), conn,
+        )
+    # Camiones distintos que trae la OT, para mostrar en el listado -- una
+    # OT ya no es de un solo camión, así que la columna "patente" de la
+    # cabecera no basta.
+    patentes_por_ot = (
+        items_df.dropna(subset=["patente"]).groupby("ot_id")["patente"]
+        .apply(lambda s: ", ".join(sorted(set(s))))
+    )
+    df["patentes"] = df["id"].map(patentes_por_ot).fillna("—")
     return df
 
 
@@ -311,18 +335,18 @@ def items_de_ot(engine, ot_id: int) -> pd.DataFrame:
 
 
 def completar_ot(
-    engine, ot_id: int, patente: str, completado_por: str, notas_cierre: str = "",
-    horometros: dict[str, int] | None = None,
+    engine, ot_id: int, completado_por: str, notas_cierre: str = "",
+    horometros: dict[int, int] | None = None,
 ):
     """Marca la OT como completada. Los ítems de Mantenimiento Programado
-    que traiga (puede venir mezclada con Inspección y/o Fallas) se
-    traducen en un evento real por ítem, así el Dashboard se actualiza
-    solo -- los de Inspección/Fallas no necesitan nada más, porque esas ya
-    tienen su propia fuente de verdad en Datascope.
+    que traiga (puede venir mezclada con Inspección y/o Fallas, de camiones
+    distintos) se traducen en un evento real por ítem, así el Dashboard se
+    actualiza solo -- los de Inspección/Fallas no necesitan nada más,
+    porque esas ya tienen su propia fuente de verdad en Datascope.
 
-    `horometros` es {item_key: horas} -- cada componente de Mantenimiento
-    Programado se trata independiente, así que puede traer su propio
-    horómetro (o ninguno) en vez de uno solo compartido por toda la OT.
+    `horometros` es {ot_item_id: horas} -- keyed por el id del ítem (no por
+    item_key) porque una misma OT puede traer el mismo componente para más
+    de un camión, y cada uno puede tener su propio horómetro.
     """
     ahora = datetime.now()
     actualizar_estado_ot(
@@ -333,8 +357,9 @@ def completar_ot(
     items = items_de_ot(engine, ot_id)
     items_mant = items[items["tipo_item"] == "item_key"]
     for _, fila_item in items_mant.iterrows():
+        ot_item_id = int(fila_item["id"])
         planificacion.registrar_evento(
-            engine, patente=patente, items=[fila_item["referencia"]], fecha=ahora.date(),
-            horometro=horometros.get(fila_item["referencia"]), tecnico=completado_por,
-            detalle=notas_cierre, registrado_por=completado_por, ot_item_id=int(fila_item["id"]),
+            engine, patente=fila_item["patente"], items=[fila_item["referencia"]], fecha=ahora.date(),
+            horometro=horometros.get(ot_item_id), tecnico=completado_por,
+            detalle=notas_cierre, registrado_por=completado_por, ot_item_id=ot_item_id,
         )

@@ -105,29 +105,36 @@ if pendientes.empty:
     st.info("No hay OTs pendientes.")
 else:
     for _, fila in pendientes.iterrows():
+        fecha_prog = fila.get("fecha_programada") or "—"
+        turno_txt = ot.TURNO_LABEL.get(fila.get("turno"), fila.get("turno") or "—")
         titulo_ot = (
-            f"{fila['numero_ot']} — {nombre_por_patente.get(fila['patente'], fila['patente'])} "
-            f"({fila['patente']}) — {ot.TIPO_TRABAJO_LABEL.get(fila['tipo_trabajo'], fila['tipo_trabajo'])}"
+            f"{fila['numero_ot']} — {fecha_prog} ({turno_txt}) — {fila.get('patentes', '—')} — "
+            f"{ot.TIPO_TRABAJO_LABEL.get(fila['tipo_trabajo'], fila['tipo_trabajo'])}"
         )
         with st.expander(titulo_ot, expanded=False):
             items = ot.items_de_ot(engine, fila["id"])
 
             # Cada ítem de la OT (cada checklist de inspección, cada falla,
-            # cada componente de mantenimiento) es su propio desplegable,
-            # colapsado por defecto -- el mecánico los va abriendo de a uno.
+            # cada componente de mantenimiento, de cada camión) es su propio
+            # desplegable, colapsado por defecto -- el mecánico los va
+            # abriendo de a uno. El nombre del camión va en el título de
+            # cada ítem porque una misma OT puede traer varios camiones.
             checklist_por_item = {}   # ot_item_id -> respuestas (solo inspección)
             falla_mant_por_item = {}  # ot_item_id -> {sistema, foto_antes, foto_despues, horometro}
 
             for _, it in items[items["tipo_item"] == "inspeccion"].iterrows():
-                with st.expander(f"🔍 {it['referencia']}", expanded=False):
+                nombre_camion = nombre_por_patente.get(it["patente"], it["patente"])
+                with st.expander(f"🔍 {it['referencia']} — {nombre_camion} ({it['patente']})", expanded=False):
                     checklist_por_item[it["id"]] = _render_checklist_inspeccion(it["id"], it["referencia"])
 
             for _, it in items[items["tipo_item"] == "ticket"].iterrows():
-                with st.expander(f"⚠️ {it['descripcion'] or it['referencia']}", expanded=False):
+                nombre_camion = nombre_por_patente.get(it["patente"], it["patente"])
+                with st.expander(f"⚠️ {it['descripcion'] or it['referencia']} — {nombre_camion} ({it['patente']})", expanded=False):
                     falla_mant_por_item[it["id"]] = _render_falla(it["id"])
 
             for _, it in items[items["tipo_item"] == "item_key"].iterrows():
-                with st.expander(f"🛠️ {it['descripcion'] or it['referencia']}", expanded=False):
+                nombre_camion = nombre_por_patente.get(it["patente"], it["patente"])
+                with st.expander(f"🛠️ {it['descripcion'] or it['referencia']} — {nombre_camion} ({it['patente']})", expanded=False):
                     falla_mant_por_item[it["id"]] = _render_mantenimiento(it["id"])
 
             notas = st.text_area("Notas de cierre (qué se hizo)", key=f"notas_{fila['id']}")
@@ -156,11 +163,10 @@ else:
                             datos["sistema"], datos["foto_antes"], datos["foto_despues"],
                         )
                         if datos["horometro"] is not None:
-                            referencia = items.loc[items["id"] == ot_item_id, "referencia"].iloc[0]
-                            horometros[referencia] = int(datos["horometro"])
+                            horometros[ot_item_id] = int(datos["horometro"])
 
                     ot.completar_ot(
-                        engine, ot_id=fila["id"], patente=fila["patente"],
+                        engine, ot_id=fila["id"],
                         completado_por=usuario["nombre"], notas_cierre=notas, horometros=horometros,
                     )
                     flash("success", f"{fila['numero_ot']} marcada como completada.")
@@ -174,9 +180,9 @@ with st.expander(f"Historial de completadas ({len(completadas)})"):
         completadas_mostrar["tipo_trabajo"] = completadas_mostrar["tipo_trabajo"].map(ot.TIPO_TRABAJO_LABEL)
         st.dataframe(
             completadas_mostrar[[
-                "numero_ot", "patente", "tipo_trabajo", "completado_at", "completado_por", "notas_cierre",
+                "numero_ot", "patentes", "tipo_trabajo", "completado_at", "completado_por", "notas_cierre",
             ]].rename(columns={
-                "numero_ot": "OT", "patente": "Camión", "tipo_trabajo": "Tipo",
+                "numero_ot": "OT", "patentes": "Camiones", "tipo_trabajo": "Tipo",
                 "completado_at": "Completada", "completado_por": "Por", "notas_cierre": "Notas",
             }),
             hide_index=True, width="stretch",

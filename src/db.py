@@ -190,14 +190,39 @@ def _migrar_columnas_nuevas(engine):
     from sqlalchemy import inspect, text
 
     inspector = inspect(engine)
-    tabla = "eventos_mantenimiento"
-    nombre_completo = f"{config.DB_SCHEMA}.{tabla}" if config.DB_SCHEMA else tabla
-    if tabla not in inspector.get_table_names(schema=config.DB_SCHEMA):
-        return  # tabla nueva, `create_all` ya la crea completa
-    columnas = {c["name"] for c in inspector.get_columns(tabla, schema=config.DB_SCHEMA)}
-    if "ot_item_id" not in columnas:
+    tablas_existentes = set(inspector.get_table_names(schema=config.DB_SCHEMA))
+
+    # (tabla, columna, tipo SQL) -- cada vez que se agrega un campo nuevo a
+    # una tabla que ya existía en bases ya desplegadas, se agrega aquí.
+    COLUMNAS_NUEVAS = [
+        ("eventos_mantenimiento", "ot_item_id", "INTEGER"),
+        ("ordenes_trabajo", "fecha_programada", "VARCHAR(10)"),
+        ("ordenes_trabajo", "turno", "VARCHAR(10)"),
+        ("ot_items", "patente", "VARCHAR(20)"),
+    ]
+
+    def _nombre_completo(tabla):
+        return f"{config.DB_SCHEMA}.{tabla}" if config.DB_SCHEMA else tabla
+
+    for tabla, columna, tipo_sql in COLUMNAS_NUEVAS:
+        if tabla not in tablas_existentes:
+            continue  # tabla nueva, `create_all` ya la crea completa con todo
+        columnas = {c["name"] for c in inspector.get_columns(tabla, schema=config.DB_SCHEMA)}
+        if columna not in columnas:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {_nombre_completo(tabla)} ADD COLUMN {columna} {tipo_sql}"))
+
+    # Backfill: OTs creadas antes de que `patente` viviera en el ítem --
+    # les copiamos la patente de la cabecera a cada uno de sus ítems, una
+    # sola vez (los que ya tengan patente propia quedan intactos).
+    if "ordenes_trabajo" in tablas_existentes and "ot_items" in tablas_existentes:
+        ot = f"{_nombre_completo('ordenes_trabajo')}"
+        oi = f"{_nombre_completo('ot_items')}"
         with engine.begin() as conn:
-            conn.execute(text(f"ALTER TABLE {nombre_completo} ADD COLUMN ot_item_id INTEGER"))
+            conn.execute(text(
+                f"UPDATE {oi} SET patente = (SELECT patente FROM {ot} WHERE {ot}.id = {oi}.ot_id) "
+                f"WHERE {oi}.patente IS NULL"
+            ))
 
 
 def init_db(engine=None):
@@ -348,8 +373,13 @@ ordenes_trabajo = Table(
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("numero_ot", String(20), unique=True),
-    Column("patente", String(20), index=True),
-    Column("tipo_trabajo", String(30)),  # inspeccion | fallas | mantenimiento_programado
+    # `patente` queda solo por compatibilidad con OTs viejas (una OT ya no
+    # es de un solo camión -- ver `ot_items.patente`). No se usa en OTs
+    # nuevas.
+    Column("patente", String(20), index=True, nullable=True),
+    Column("fecha_programada", String(10), nullable=True),  # "YYYY-MM-DD", cuándo se hace el trabajo
+    Column("turno", String(10), nullable=True),  # "diurno" | "nocturno"
+    Column("tipo_trabajo", String(30)),  # inspeccion | fallas | mantenimiento_programado | mixta
     Column("asignado_id", Integer, index=True),  # FK mecanicos_talleres.id
     Column("estado", String(20), index=True),  # borrador | enviada | completada | cancelada
     Column("creado_por", String(60), nullable=True),
@@ -360,8 +390,10 @@ ordenes_trabajo = Table(
     Column("notas_cierre", Text, nullable=True),
 )
 
-# Las tareas concretas dentro de una OT. `tipo_item`/`referencia` dependen
-# del tipo de trabajo de la OT:
+# Las tareas concretas dentro de una OT. Una misma OT puede traer ítems de
+# camiones distintos (ej. la misma Inspección Semanal para 3 camiones) --
+# por eso `patente` vive en el ítem, no en la cabecera de la OT.
+# `tipo_item`/`referencia` dependen del tipo de ítem:
 #  - inspeccion            -> referencia = "Inicio Día" | "Fin Día" | "Semanal"
 #  - fallas                -> referencia = id del ticket (tabla `tickets`)
 #  - mantenimiento_programado -> referencia = item_key (tabla `item_catalogo`)
@@ -370,6 +402,7 @@ ot_items = Table(
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("ot_id", Integer, index=True),
+    Column("patente", String(20), index=True, nullable=True),
     Column("tipo_item", String(30)),
     Column("referencia", String(60)),
     Column("descripcion", String(255), nullable=True),
@@ -443,7 +476,11 @@ def upsert_mecanico_taller(engine, fila: dict) -> int:
                 .values(**{k: v for k, v in fila.items() if k != "id"})
             )
             return fila["id"]
-        result = conn.execute(mecanicos_talleres.insert().values(**fila))
+        # Se omite la clave "id" (aunque venga como None) -- en Postgres,
+        # insertar NULL explícito en una columna autoincremental NO la deja
+        # generar el valor por defecto (a diferencia de SQLite, donde
+        # insertar NULL en el INTEGER PRIMARY KEY sí autogenera el rowid).
+        result = conn.execute(mecanicos_talleres.insert().values(**{k: v for k, v in fila.items() if k != "id"}))
         return result.inserted_primary_key[0]
 
 

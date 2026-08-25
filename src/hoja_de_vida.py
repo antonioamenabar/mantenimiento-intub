@@ -22,7 +22,7 @@ def _completados(engine, patente: str, tipo_item: str) -> pd.DataFrame:
             ordenes_trabajo.c.completado_por, ordenes_trabajo.c.notas_cierre,
         )
         .join(ordenes_trabajo, ordenes_trabajo.c.id == ot_items.c.ot_id)
-        .where(ordenes_trabajo.c.patente == patente)
+        .where(ot_items.c.patente == patente)
         .where(ordenes_trabajo.c.estado == "completada")
         .where(ot_items.c.tipo_item == tipo_item)
         .order_by(ordenes_trabajo.c.completado_at.desc())
@@ -62,7 +62,8 @@ def detalle_item_completo(engine, ot_item_id: int) -> dict | None:
     stmt = (
         select(
             ot_items.c.tipo_item, ot_items.c.referencia, ot_items.c.descripcion,
-            ordenes_trabajo.c.numero_ot, ordenes_trabajo.c.patente,
+            ot_items.c.patente,
+            ordenes_trabajo.c.numero_ot,
             ordenes_trabajo.c.creado_por, ordenes_trabajo.c.creado_at,
             ordenes_trabajo.c.completado_por, ordenes_trabajo.c.completado_at,
             ordenes_trabajo.c.notas_cierre,

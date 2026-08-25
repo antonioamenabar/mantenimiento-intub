@@ -5,6 +5,7 @@ estado). Tres secciones: crear una OT nueva, seguimiento de todas las OTs,
 y administrar mecánicos internos / talleres externos.
 """
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -97,14 +98,15 @@ with tab_crear:
             "Ve a la pestaña **Mecánicos y talleres** y agrega al menos uno antes de crear una OT."
         )
     else:
-        col1, col2 = st.columns(2)
-        with col1:
-            patente = st.selectbox(
-                "Camión", options=todas_patentes["patente"].tolist(),
-                format_func=lambda p: f"{nombre_por_patente.get(p, p)} ({p})",
-                key="ot_patente",
+        col_fecha, col_turno, col_asignado = st.columns(3)
+        with col_fecha:
+            fecha_prog = st.date_input("Fecha", value=datetime.now().date(), key="ot_fecha")
+        with col_turno:
+            turno_sel = st.radio(
+                "Turno", options=["diurno", "nocturno"], format_func=lambda t: ot.TURNO_LABEL[t],
+                horizontal=True, key="ot_turno",
             )
-        with col2:
+        with col_asignado:
             etiqueta_asignado = dict(zip(
                 asignables["id"],
                 asignables["nombre"] + " — " + asignables["tipo"].map({"interno": "mecánico interno", "externo": "taller externo"}),
@@ -115,33 +117,66 @@ with tab_crear:
             )
 
         st.caption(
-            "Una misma OT puede llevar trabajo de más de un tipo -- marca lo que corresponda "
-            "en cada sección de abajo."
+            "Una misma OT puede llevar trabajo de más de un tipo, y de más de un camión -- agrega "
+            "lo que corresponda en cada sección y después revisa el borrador."
         )
-        items_sel = []
 
-        with st.expander("🔍 Inspección", expanded=False):
+        # El "carrito" junta los ítems elegidos en las 3 secciones antes de
+        # armar el borrador -- cada ítem lleva su propia patente, así una
+        # OT puede combinar camiones distintos.
+        carrito = st.session_state.setdefault("ot_carrito", [])
+
+        with st.expander(f"🔍 Inspección", expanded=False):
             subtipos_sel = st.multiselect(
-                "Tipo de inspección", options=ot.SUBTIPOS_INSPECCION, key="ot_subtipos_inspeccion",
+                "Tipo de inspección", options=ot.SUBTIPOS_INSPECCION, key="ot_insp_subtipos",
             )
-            items_sel += [{"tipo_item": "inspeccion", "referencia": s, "descripcion": s} for s in subtipos_sel]
+            patentes_insp_sel = st.multiselect(
+                "Camiones a los que aplica", options=todas_patentes["patente"].tolist(),
+                format_func=lambda p: f"{nombre_por_patente.get(p, p)} ({p})", key="ot_insp_patentes",
+            )
+            if st.button("➕ Agregar al carrito", key="ot_insp_agregar"):
+                if not subtipos_sel or not patentes_insp_sel:
+                    st.warning("Elige al menos un tipo de inspección y un camión.")
+                else:
+                    agregados = 0
+                    for patente_i in patentes_insp_sel:
+                        for subtipo in subtipos_sel:
+                            ya_existe = any(
+                                it["tipo_item"] == "inspeccion" and it["referencia"] == subtipo and it["patente"] == patente_i
+                                for it in carrito
+                            )
+                            if not ya_existe:
+                                carrito.append({
+                                    "tipo_item": "inspeccion", "referencia": subtipo,
+                                    "descripcion": subtipo, "patente": patente_i,
+                                })
+                                agregados += 1
+                    st.success(f"{agregados} ítem(s) agregado(s) al carrito.")
+                    st.rerun()
 
         with st.expander("⚠️ Fallas", expanded=False):
-            fallas = ot.fallas_para_ot(engine, patente)
-            asignadas_falla = ot.fallas_asignadas(engine, patente)  # {ticket_id: numero_ot}
+            patente_falla_sel = st.selectbox(
+                "Camión", options=todas_patentes["patente"].tolist(),
+                format_func=lambda p: f"{nombre_por_patente.get(p, p)} ({p})", key="ot_falla_patente",
+            )
+            fallas = ot.fallas_para_ot(engine, patente_falla_sel)
+            asignadas_falla = ot.fallas_asignadas(engine, patente_falla_sel)  # {ticket_id: numero_ot}
+            en_carrito_falla = {
+                it["referencia"] for it in carrito if it["tipo_item"] == "ticket" and it["patente"] == patente_falla_sel
+            }
             if fallas.empty:
                 st.info("Este camión no tiene fallas abiertas en Datascope.")
             else:
-                ya_asignada = fallas["id"].astype(str).isin(asignadas_falla.keys())
+                ya_asignada = fallas["id"].astype(str).isin(asignadas_falla.keys()) | fallas["id"].astype(str).isin(en_carrito_falla)
                 fallas_disp = fallas[~ya_asignada].reset_index(drop=True)
                 fallas_asig = fallas[ya_asignada]
 
                 if fallas_disp.empty:
-                    st.info("Todas las fallas abiertas de este camión ya están asignadas a otra OT en curso.")
+                    st.info("No quedan fallas de este camión disponibles (ya asignadas o ya en el carrito).")
                 else:
                     st.caption(
                         "Ordenadas de más crítica y antigua, a menos. Marca el ✅ de la primera "
-                        "columna para incluirla en la OT."
+                        "columna e inclúyelas en el carrito."
                     )
                     tabla_mostrar = fallas_disp.copy()
                     tabla_mostrar["priority"] = tabla_mostrar["priority"].map(PRIORIDAD_LABEL).fillna(tabla_mostrar["priority"])
@@ -155,26 +190,30 @@ with tab_crear:
                     seleccion_fallas = st.dataframe(
                         tabla_mostrar[["N°", "Descripción", "Criticidad", "Antigüedad (días)"]],
                         hide_index=True, width="stretch",
-                        on_select="rerun", selection_mode="multi-row", key=f"ot_fallas_tabla_{patente}",
+                        on_select="rerun", selection_mode="multi-row", key=f"ot_fallas_tabla_{patente_falla_sel}",
                     )
                     filas_sel = seleccion_fallas["selection"]["rows"] if seleccion_fallas else []
                     fallas_sel_df = fallas_disp.iloc[filas_sel]
-                    items_sel += [
-                        {
-                            "tipo_item": "ticket", "referencia": str(r["id"]),
-                            "descripcion": f"#{r['code']} — {r['descripcion']}",
-                        }
-                        for _, r in fallas_sel_df.iterrows()
-                    ]
+                    if st.button("➕ Agregar seleccionadas al carrito", key="ot_falla_agregar"):
+                        if fallas_sel_df.empty:
+                            st.warning("No marcaste ninguna falla.")
+                        else:
+                            for _, r in fallas_sel_df.iterrows():
+                                carrito.append({
+                                    "tipo_item": "ticket", "referencia": str(r["id"]),
+                                    "descripcion": f"#{r['code']} — {r['descripcion']}", "patente": patente_falla_sel,
+                                })
+                            st.success(f"{len(fallas_sel_df)} falla(s) agregada(s) al carrito.")
+                            st.rerun()
 
                 if not fallas_asig.empty:
-                    st.caption("Ya asignadas a otra OT en curso -- no se pueden volver a asignar:")
+                    st.caption("Ya asignadas a otra OT en curso, o ya en el carrito -- no se pueden agregar de nuevo:")
                     filas_html = "".join(
                         "<tr>"
                         f"<td>#{r['code']}</td>"
                         f"<td class='izq'>{r['descripcion']}</td>"
                         f"<td>{PRIORIDAD_LABEL.get(r['priority'], r['priority'])}</td>"
-                        f"<td>{asignadas_falla.get(str(r['id']), '—')}</td>"
+                        f"<td>{asignadas_falla.get(str(r['id'])) or 'En este carrito'}</td>"
                         "</tr>"
                         for _, r in fallas_asig.iterrows()
                     )
@@ -193,22 +232,29 @@ with tab_crear:
                         _dialog_detalle_falla(ticket_ver)
 
         with st.expander("🛠️ Mantenimiento Programado", expanded=False):
-            items_estado = ot.items_mantenimiento_para_ot(engine, patente)
-            asignados_mant = ot.items_mantenimiento_asignados(engine, patente)  # {item_key: numero_ot}
+            patente_mant_sel = st.selectbox(
+                "Camión", options=todas_patentes["patente"].tolist(),
+                format_func=lambda p: f"{nombre_por_patente.get(p, p)} ({p})", key="ot_mant_patente",
+            )
+            items_estado = ot.items_mantenimiento_para_ot(engine, patente_mant_sel)
+            asignados_mant = ot.items_mantenimiento_asignados(engine, patente_mant_sel)  # {item_key: numero_ot}
+            en_carrito_mant = {
+                it["referencia"] for it in carrito if it["tipo_item"] == "item_key" and it["patente"] == patente_mant_sel
+            }
 
-            ya_asignado = items_estado["item_key"].isin(asignados_mant.keys())
+            ya_asignado = items_estado["item_key"].isin(asignados_mant.keys()) | items_estado["item_key"].isin(en_carrito_mant)
             items_disp = items_estado[~ya_asignado].reset_index(drop=True)
             items_asig = items_estado[ya_asignado]
 
             if items_disp.empty:
-                st.info("Todos los componentes de este camión ya están asignados a otra OT en curso.")
+                st.info("No quedan componentes de este camión disponibles (ya asignados o ya en el carrito).")
             else:
                 items_disp_mostrar = items_disp.copy()
                 items_disp_mostrar["categoria"] = items_disp_mostrar["categoria"].map(planificacion.CATEGORIA_LABEL)
                 items_disp_mostrar["horas_venc"] = items_disp_mostrar["horas_venc"].apply(
                     lambda h: "Sin dato" if h is None else f"{h:.0f}"
                 )
-                st.caption("Marca el ✅ de la primera columna para incluir ese componente en la OT.")
+                st.caption("Marca el ✅ de la primera columna e inclúyelos en el carrito.")
                 # Misma razón que en Fallas: la key incluye la patente para
                 # que la selección se reinicie al cambiar de camión.
                 seleccion_mant = st.dataframe(
@@ -216,22 +262,29 @@ with tab_crear:
                         columns={"categoria": "Grupo", "nombre": "Componente", "horas_venc": "Horas para el vencimiento"}
                     ),
                     hide_index=True, width="stretch",
-                    on_select="rerun", selection_mode="multi-row", key=f"ot_mant_tabla_{patente}",
+                    on_select="rerun", selection_mode="multi-row", key=f"ot_mant_tabla_{patente_mant_sel}",
                 )
                 filas_sel_mant = seleccion_mant["selection"]["rows"] if seleccion_mant else []
                 items_mant_sel_df = items_disp.iloc[filas_sel_mant]
-                items_sel += [
-                    {"tipo_item": "item_key", "referencia": r["item_key"], "descripcion": r["nombre"]}
-                    for _, r in items_mant_sel_df.iterrows()
-                ]
+                if st.button("➕ Agregar seleccionados al carrito", key="ot_mant_agregar"):
+                    if items_mant_sel_df.empty:
+                        st.warning("No marcaste ningún componente.")
+                    else:
+                        for _, r in items_mant_sel_df.iterrows():
+                            carrito.append({
+                                "tipo_item": "item_key", "referencia": r["item_key"],
+                                "descripcion": r["nombre"], "patente": patente_mant_sel,
+                            })
+                        st.success(f"{len(items_mant_sel_df)} componente(s) agregado(s) al carrito.")
+                        st.rerun()
 
             if not items_asig.empty:
-                st.caption("Ya asignados a otra OT en curso -- no se pueden volver a asignar:")
+                st.caption("Ya asignados a otra OT en curso, o ya en el carrito -- no se pueden agregar de nuevo:")
                 filas_html = "".join(
                     "<tr>"
                     f"<td class='izq'>{planificacion.CATEGORIA_LABEL.get(r['categoria'], r['categoria'])}</td>"
                     f"<td class='izq'>{r['nombre']}</td>"
-                    f"<td>{asignados_mant.get(r['item_key'], '—')}</td>"
+                    f"<td>{asignados_mant.get(r['item_key']) or 'En este carrito'}</td>"
                     "</tr>"
                     for _, r in items_asig.iterrows()
                 )
@@ -239,40 +292,52 @@ with tab_crear:
 
         st.divider()
 
-        if not items_sel:
-            st.caption("Selecciona al menos un ítem para poder ver el borrador.")
+        etiqueta_categoria = {"inspeccion": "Inspección", "ticket": "Fallas", "item_key": "Mantenimiento Programado"}
+
+        if not carrito:
+            st.caption("El carrito está vacío -- agrega ítems en las secciones de arriba.")
         else:
+            st.markdown(f"#### Carrito ({len(carrito)} ítem(s))")
+            for i, it in enumerate(carrito):
+                nombre_camion = nombre_por_patente.get(it["patente"], it["patente"])
+                col_item, col_quitar = st.columns([5, 1])
+                with col_item:
+                    st.markdown(f"**{etiqueta_categoria[it['tipo_item']]}** — {it['descripcion']} — {nombre_camion} ({it['patente']})")
+                with col_quitar:
+                    if st.button("🗑️", key=f"ot_carrito_quitar_{i}"):
+                        carrito.pop(i)
+                        st.rerun()
+
             if st.button("Ver borrador de la OT", key="ot_ver_borrador"):
-                st.session_state["ot_borrador"] = {
-                    "patente": patente, "asignado_id": asignado_id, "items": items_sel,
-                }
+                st.session_state["ot_borrador"] = list(carrito)
 
         borrador = st.session_state.get("ot_borrador")
         if borrador:
             st.markdown("#### Borrador de la OT")
-            asignado_nombre = etiqueta_asignado.get(borrador["asignado_id"], borrador["asignado_id"])
-            tipo_resumen = ot.TIPO_TRABAJO_LABEL[ot.tipo_trabajo_resumen(borrador["items"])]
-            etiqueta_categoria = {"inspeccion": "Inspección", "ticket": "Fallas", "item_key": "Mantenimiento Programado"}
+            asignado_nombre = etiqueta_asignado.get(asignado_id, asignado_id)
+            tipo_resumen = ot.TIPO_TRABAJO_LABEL[ot.tipo_trabajo_resumen(borrador)]
+            patentes_borrador = sorted({it["patente"] for it in borrador})
             with st.container(border=True):
-                st.markdown(f"**Camión:** {nombre_por_patente.get(borrador['patente'], borrador['patente'])} ({borrador['patente']})")
+                st.markdown(f"**Fecha:** {fecha_prog.strftime('%d-%m-%Y')} — **Turno:** {ot.TURNO_LABEL[turno_sel]}")
+                st.markdown(f"**Camiones:** {', '.join(nombre_por_patente.get(p, p) for p in patentes_borrador)}")
                 st.markdown(f"**Asignado a:** {asignado_nombre}")
                 st.markdown(f"**Tipo de trabajo:** {tipo_resumen}")
                 st.markdown("**Ítems:**")
                 for categoria in ("inspeccion", "ticket", "item_key"):
-                    del_categoria = [it for it in borrador["items"] if it["tipo_item"] == categoria]
+                    del_categoria = [it for it in borrador if it["tipo_item"] == categoria]
                     if not del_categoria:
                         continue
                     st.markdown(f"*{etiqueta_categoria[categoria]}:*")
                     for it in del_categoria:
-                        st.markdown(f"- {it['descripcion']}")
+                        nombre_camion = nombre_por_patente.get(it["patente"], it["patente"])
+                        st.markdown(f"- {it['descripcion']} — {nombre_camion} ({it['patente']})")
 
             col_aprobar, col_editar = st.columns(2)
             with col_aprobar:
                 if st.button("✅ Aprobar y enviar", type="primary", key="ot_aprobar"):
                     resultado = ot.crear_y_enviar_ot(
-                        engine, patente=borrador["patente"],
-                        asignado_id=borrador["asignado_id"], items=borrador["items"],
-                        creado_por=usuario["nombre"],
+                        engine, fecha_programada=fecha_prog, turno=turno_sel,
+                        asignado_id=asignado_id, items=borrador, creado_por=usuario["nombre"],
                     )
                     mensaje = f"OT {resultado['numero_ot']} creada y enviada."
                     if resultado["email_enviado"]:
@@ -283,6 +348,7 @@ with tab_crear:
                     else:
                         flash("success", mensaje)
                     del st.session_state["ot_borrador"]
+                    st.session_state["ot_carrito"] = []
                     st.rerun()
             with col_editar:
                 if st.button("✏️ Seguir editando", key="ot_editar"):
@@ -307,12 +373,15 @@ with tab_seguimiento:
         tabla_mostrar = tabla.copy()
         tabla_mostrar["tipo_trabajo"] = tabla_mostrar["tipo_trabajo"].map(ot.TIPO_TRABAJO_LABEL)
         tabla_mostrar["estado"] = tabla_mostrar["estado"].map(ot.ESTADO_LABEL)
+        tabla_mostrar["turno"] = tabla_mostrar["turno"].map(ot.TURNO_LABEL).fillna("—")
+        tabla_mostrar["fecha_programada"] = tabla_mostrar["fecha_programada"].fillna("—")
         st.dataframe(
             tabla_mostrar[[
-                "numero_ot", "patente", "tipo_trabajo", "asignado_nombre", "asignado_tipo",
-                "estado", "creado_at", "completado_at",
+                "numero_ot", "fecha_programada", "turno", "patentes", "tipo_trabajo",
+                "asignado_nombre", "asignado_tipo", "estado", "creado_at", "completado_at",
             ]].rename(columns={
-                "numero_ot": "OT", "patente": "Camión", "tipo_trabajo": "Tipo",
+                "numero_ot": "OT", "fecha_programada": "Fecha", "turno": "Turno",
+                "patentes": "Camiones", "tipo_trabajo": "Tipo",
                 "asignado_nombre": "Asignado a", "asignado_tipo": "Tipo asignado",
                 "estado": "Estado", "creado_at": "Creada", "completado_at": "Completada",
             }),

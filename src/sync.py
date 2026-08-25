@@ -32,7 +32,7 @@ def main():
     print(f"  {len(tickets)} tickets obtenidos.")
     db.replace_tickets(engine, tickets, synced_at=ahora)
 
-    print(f"Sincronización completa -> {config.get_database_url()}")
+    print(f"Sincronización completa -> backend={config.DB_BACKEND} (no se imprime la URL: puede traer la contraseña)")
 
 
 if __name__ == "__main__":
