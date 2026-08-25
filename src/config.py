@@ -12,6 +12,14 @@ DATASCOPE_FORM_ID = int(os.getenv("DATASCOPE_FORM_ID", "658357"))
 DB_BACKEND = os.getenv("DB_BACKEND", "sqlite")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
+# Esquema de Postgres donde viven las tablas de este software -- separado
+# de "public" a propósito, porque el proyecto Supabase se comparte con
+# otros sistemas de Intub (ej. reportes-intub de Felipe). Cada sistema usa
+# su propio esquema dentro de la misma base, así conviven sin chocar
+# nombres de tabla, y se pueden hacer joins entre esquemas el día que se
+# necesite. No aplica a SQLite (desarrollo local) -- ahí no hay esquemas.
+DB_SCHEMA = "mantenimiento" if DB_BACKEND == "postgres" else None
+
 # Ruta del archivo SQLite local (solo se usa si DB_BACKEND=sqlite)
 SQLITE_PATH = ROOT_DIR / "data" / "mantenimiento.db"
 

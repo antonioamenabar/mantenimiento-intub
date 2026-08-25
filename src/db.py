@@ -11,7 +11,10 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from src import config
 
-metadata = MetaData()
+# `schema=None` en SQLite (no soporta esquemas); en Postgres, todas las
+# tablas de este software quedan bajo `config.DB_SCHEMA` ("mantenimiento"),
+# separadas de lo que tenga cualquier otro sistema de Intub en la misma base.
+metadata = MetaData(schema=config.DB_SCHEMA)
 
 mantenimiento_registros = Table(
     "mantenimiento_registros",
@@ -96,15 +99,117 @@ flota = Table(
     Column("activo", Boolean, default=True),
 )
 
+# ---------------------------------------------------------------------------
+# Mantenimiento Programado (punto 2/3 del plan): catálogo de componentes
+# mayores, reglas de mantención por marca/modelo, qué componente físico
+# tiene instalado cada camión, y el registro de mantenciones realizadas.
+# ---------------------------------------------------------------------------
+
+# Catálogo maestro de "qué se puede registrar" -- una fila por componente
+# mayor de Camión (chasis) o Equipo. Es la lista de columnas de la matriz
+# del dashboard. Vive en la base (no solo en Python) para que agregar un
+# ítem nuevo no requiera cambiar código, solo una fila.
+item_catalogo = Table(
+    "item_catalogo",
+    metadata,
+    Column("item_key", String(40), primary_key=True),
+    Column("categoria", String(10)),  # "camion" | "equipo"
+    Column("nombre", String(60)),
+    Column("orden", Integer),
+)
+
+# Reglas de intervalo por componente. `marca`/`modelo` en NULL = regla
+# genérica para ese item_key (la práctica de industria que usamos cuando no
+# conocemos el componente exacto instalado). Si más adelante llega el manual
+# oficial de una marca, se agrega una fila más específica sin tocar código.
+reglas_mantencion = Table(
+    "reglas_mantencion",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("item_key", String(40), index=True),
+    Column("marca", String(60), nullable=True),
+    Column("modelo", String(60), nullable=True),
+    Column("intervalo_meses", Integer, nullable=True),
+    Column("intervalo_horas", Integer, nullable=True),
+    Column("confianza", String(12)),  # confirmado | estimado | sindato
+    Column("fuente", Text),
+)
+
+# Qué componente físico (marca/modelo/n° de serie) tiene instalado cada
+# camión -- se llena con las placas que Antonio va a mandar. Mientras no
+# haya fila para un (patente, item_key), la matriz usa la regla genérica del
+# item_key y lo marca como "sindato" de componente.
+componentes_camion = Table(
+    "componentes_camion",
+    metadata,
+    Column("patente", String(20), primary_key=True),
+    Column("item_key", String(40), primary_key=True),
+    Column("marca", String(60), nullable=True),
+    Column("modelo", String(60), nullable=True),
+    Column("numero_serie", String(60), nullable=True),
+    Column("tiene_horometro_propio", Boolean, default=False),
+)
+
+# El registro real de mantenciones hechas. Una fila por (patente, item_key,
+# fecha) -- si en una misma parada se hacen varios ítems, comparten
+# `grupo_id` para poder mostrarlos agrupados como "una visita", pero cada
+# ítem mantiene su propia fecha/hora de vencimiento independiente.
+eventos_mantenimiento = Table(
+    "eventos_mantenimiento",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("grupo_id", String(40), index=True),
+    Column("patente", String(20), index=True),
+    Column("item_key", String(40), index=True),
+    Column("fecha", String(10)),  # "YYYY-MM-DD"
+    Column("horometro", Integer, nullable=True),
+    Column("tecnico", String(120), nullable=True),
+    Column("detalle", Text, nullable=True),
+    Column("fallas_resueltas", Text, nullable=True),
+    Column("notas", Text, nullable=True),
+    Column("registrado_por", String(120), nullable=True),
+    Column("created_at", DateTime),
+    # Qué ot_item de qué OT generó este evento -- para el Certificado de
+    # Mantenimiento (Hoja de Vida). Nullable porque las bases que ya
+    # tenían esta tabla antes de este campo la migran sola (ver
+    # `_migrar_columnas_nuevas`).
+    Column("ot_item_id", Integer, nullable=True),
+)
+
 
 def get_engine():
     return create_engine(config.get_database_url())
 
 
+def _migrar_columnas_nuevas(engine):
+    """Agrega columnas nuevas a tablas que ya existían sin ellas -- para no
+    tener que borrar la base de desarrollo cada vez que se agrega un campo.
+    `ALTER TABLE ... ADD COLUMN` es seguro tanto en SQLite como en Postgres
+    (no toca las filas existentes, quedan con NULL en la columna nueva).
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    tabla = "eventos_mantenimiento"
+    nombre_completo = f"{config.DB_SCHEMA}.{tabla}" if config.DB_SCHEMA else tabla
+    if tabla not in inspector.get_table_names(schema=config.DB_SCHEMA):
+        return  # tabla nueva, `create_all` ya la crea completa
+    columnas = {c["name"] for c in inspector.get_columns(tabla, schema=config.DB_SCHEMA)}
+    if "ot_item_id" not in columnas:
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {nombre_completo} ADD COLUMN ot_item_id INTEGER"))
+
+
 def init_db(engine=None):
-    """Crea las tablas si no existen."""
+    """Crea el esquema (solo Postgres) y las tablas si no existen, y migra
+    columnas nuevas en tablas que ya existían sin ellas."""
     engine = engine or get_engine()
+    if config.DB_SCHEMA:
+        from sqlalchemy import text
+        with engine.begin() as conn:
+            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {config.DB_SCHEMA}"))
     metadata.create_all(engine)
+    _migrar_columnas_nuevas(engine)
     return engine
 
 
@@ -164,3 +269,245 @@ def upsert_fallas_historico(engine, filas_historico: list[dict], snapshot_at):
     """
     filas = [{**f, "snapshot_at": snapshot_at} for f in filas_historico]
     _upsert(engine, fallas_historico, filas, ["semana_inicio", "patente"])
+
+
+def upsert_item_catalogo(engine, items: list[dict]):
+    """Inserta o actualiza el catálogo de componentes mayores (Camión/Equipo)."""
+    _upsert(engine, item_catalogo, items, "item_key")
+
+
+def replace_reglas_mantencion(engine, reglas: list[dict]):
+    """Reemplaza por completo las reglas de mantención (borra todo y vuelve a
+    insertar). Se usa reemplazo -- igual que con los tickets -- porque las
+    reglas viven como constantes en `src/planificacion.py` y se reconstruyen
+    completas cada vez que se corre el seed; no tiene sentido ir acumulando
+    filas viejas si una regla cambió de intervalo.
+    """
+    with engine.begin() as conn:
+        conn.execute(reglas_mantencion.delete())
+        if reglas:
+            conn.execute(reglas_mantencion.insert(), reglas)
+
+
+def upsert_componentes_camion(engine, componentes: list[dict]):
+    """Inserta o actualiza qué componente físico (marca/modelo/n° serie)
+    tiene instalado cada camión. Idempotente por (patente, item_key).
+    """
+    _upsert(engine, componentes_camion, componentes, ["patente", "item_key"])
+
+
+def insertar_eventos_mantenimiento(engine, filas: list[dict]):
+    """Guarda una o más filas de mantención realizada (normalmente varias a
+    la vez, una por ítem trabajado en la misma parada, compartiendo
+    `grupo_id`). Siempre se inserta -- un evento real nunca se "actualiza",
+    si algo quedó mal registrado se corrige registrando una corrección.
+    """
+    if not filas:
+        return
+    with engine.begin() as conn:
+        conn.execute(eventos_mantenimiento.insert(), filas)
+
+
+# ---------------------------------------------------------------------------
+# Software de Mantenimiento: usuarios (Jefe / Mecánicos con sesión propia),
+# mecánicos internos + talleres externos, y Órdenes de Trabajo (OT) con sus
+# ítems. Esto es el sistema donde se CREA y ASIGNA el trabajo -- distinto
+# del Dashboard (solo lectura) y de `eventos_mantenimiento` (el registro de
+# lo que ya se hizo, que una OT de Mantenimiento Programado completada
+# termina alimentando).
+# ---------------------------------------------------------------------------
+
+usuarios = Table(
+    "usuarios",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("username", String(60), unique=True),
+    Column("password_hash", String(160)),
+    Column("nombre", String(120)),
+    Column("rol", String(20)),  # "jefe" | "mecanico"
+    Column("activo", Boolean, default=True),
+    Column("created_at", DateTime),
+)
+
+# Un mecánico interno normalmente tiene `usuario_id` (puede entrar a "Mis
+# OTs" a marcarlas completadas). Un taller externo no tiene usuario -- se le
+# llega por email -- así que `usuario_id` queda en NULL.
+mecanicos_talleres = Table(
+    "mecanicos_talleres",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tipo", String(10)),  # "interno" | "externo"
+    Column("nombre", String(120)),
+    Column("contacto", String(160), nullable=True),  # email y/o teléfono
+    Column("usuario_id", Integer, nullable=True),
+    Column("activo", Boolean, default=True),
+)
+
+ordenes_trabajo = Table(
+    "ordenes_trabajo",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("numero_ot", String(20), unique=True),
+    Column("patente", String(20), index=True),
+    Column("tipo_trabajo", String(30)),  # inspeccion | fallas | mantenimiento_programado
+    Column("asignado_id", Integer, index=True),  # FK mecanicos_talleres.id
+    Column("estado", String(20), index=True),  # borrador | enviada | completada | cancelada
+    Column("creado_por", String(60), nullable=True),
+    Column("creado_at", DateTime),
+    Column("enviado_at", DateTime, nullable=True),
+    Column("completado_at", DateTime, nullable=True),
+    Column("completado_por", String(60), nullable=True),
+    Column("notas_cierre", Text, nullable=True),
+)
+
+# Las tareas concretas dentro de una OT. `tipo_item`/`referencia` dependen
+# del tipo de trabajo de la OT:
+#  - inspeccion            -> referencia = "Inicio Día" | "Fin Día" | "Semanal"
+#  - fallas                -> referencia = id del ticket (tabla `tickets`)
+#  - mantenimiento_programado -> referencia = item_key (tabla `item_catalogo`)
+ot_items = Table(
+    "ot_items",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ot_id", Integer, index=True),
+    Column("tipo_item", String(30)),
+    Column("referencia", String(60)),
+    Column("descripcion", String(255), nullable=True),
+)
+
+# ---------------------------------------------------------------------------
+# Lo que el mecánico completa al cerrar una OT: checklist con foto por cada
+# ítem de las 3 fichas de Inspección (R-PR03-09/07/04), sistema trabajado +
+# fotos antes/después en Fallas, y fotos antes/después en Mantenimiento
+# Programado. Tablas nuevas (no se toca `ot_items`) para no tener que
+# migrar filas ya creadas.
+# ---------------------------------------------------------------------------
+
+# Catálogo de ítems de cada ficha de Inspección -- vive en la base (no solo
+# en Python) para poder ajustar una ficha sin tocar código.
+inspeccion_checklist_catalogo = Table(
+    "inspeccion_checklist_catalogo",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("subtipo", String(40)),  # "Inspección Inicio Día" | "Inspección Fin Día" | "Inspección Semanal"
+    Column("grupo", String(40)),  # "Camión" | "Equipo" | "Cabina" | "Herramientas" | ...
+    Column("item", String(160)),
+    Column("orden", Integer),
+)
+
+# La respuesta del mecánico a UN ítem del catálogo, al completar un
+# ot_item de tipo "inspeccion". `foto_ruta` es la ruta relativa del
+# archivo guardado en disco (ver `src/ot_checklist.py`).
+inspeccion_checklist_respuestas = Table(
+    "inspeccion_checklist_respuestas",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ot_item_id", Integer, index=True),
+    Column("catalogo_id", Integer, index=True),
+    Column("estado", String(20)),  # "normal" | "fuera_normal"
+    Column("observacion", Text, nullable=True),
+    Column("foto_ruta", String(255), nullable=True),
+)
+
+# Qué sistema se trabajó en un ot_item de Fallas (tipo_item="ticket") --
+# una fila por ot_item, de la lista fija de 11 sistemas.
+ot_item_sistema = Table(
+    "ot_item_sistema",
+    metadata,
+    Column("ot_item_id", Integer, primary_key=True),
+    Column("sistema", String(120)),
+)
+
+# Fotos "antes"/"después" -- se usan en Fallas y en Mantenimiento
+# Programado (en Inspección la foto va colgada de cada respuesta del
+# checklist, no acá).
+ot_item_fotos = Table(
+    "ot_item_fotos",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ot_item_id", Integer, index=True),
+    Column("momento", String(10)),  # "antes" | "despues"
+    Column("ruta", String(255)),
+)
+
+
+def upsert_mecanico_taller(engine, fila: dict) -> int:
+    """Crea o actualiza un mecánico interno / taller externo. Si `fila`
+    trae "id", actualiza esa fila; si no, inserta una nueva. Devuelve el id.
+    """
+    with engine.begin() as conn:
+        if fila.get("id"):
+            conn.execute(
+                mecanicos_talleres.update()
+                .where(mecanicos_talleres.c.id == fila["id"])
+                .values(**{k: v for k, v in fila.items() if k != "id"})
+            )
+            return fila["id"]
+        result = conn.execute(mecanicos_talleres.insert().values(**fila))
+        return result.inserted_primary_key[0]
+
+
+def crear_usuario(engine, username: str, password_hash: str, nombre: str, rol: str, created_at) -> int:
+    with engine.begin() as conn:
+        result = conn.execute(usuarios.insert().values(
+            username=username, password_hash=password_hash, nombre=nombre,
+            rol=rol, activo=True, created_at=created_at,
+        ))
+        return result.inserted_primary_key[0]
+
+
+def actualizar_password(engine, usuario_id: int, password_hash: str):
+    with engine.begin() as conn:
+        conn.execute(
+            usuarios.update().where(usuarios.c.id == usuario_id).values(password_hash=password_hash)
+        )
+
+
+def crear_orden_trabajo(engine, ot: dict, items: list[dict]) -> int:
+    """Crea la OT (cabecera) y sus ítems en una sola transacción. Devuelve
+    el id de la OT creada.
+    """
+    with engine.begin() as conn:
+        result = conn.execute(ordenes_trabajo.insert().values(**ot))
+        ot_id = result.inserted_primary_key[0]
+        if items:
+            conn.execute(ot_items.insert(), [{**it, "ot_id": ot_id} for it in items])
+        return ot_id
+
+
+def actualizar_estado_ot(engine, ot_id: int, **campos):
+    with engine.begin() as conn:
+        conn.execute(ordenes_trabajo.update().where(ordenes_trabajo.c.id == ot_id).values(**campos))
+
+
+def replace_checklist_catalogo(engine, filas: list[dict]):
+    """Reemplaza por completo el catálogo de checklist (igual criterio que
+    `replace_reglas_mantencion`: vive como constante en Python, se
+    reconstruye entero cada vez que corre el seed).
+    """
+    with engine.begin() as conn:
+        conn.execute(inspeccion_checklist_catalogo.delete())
+        if filas:
+            conn.execute(inspeccion_checklist_catalogo.insert(), filas)
+
+
+def guardar_respuestas_checklist(engine, filas: list[dict]):
+    if not filas:
+        return
+    with engine.begin() as conn:
+        conn.execute(inspeccion_checklist_respuestas.insert(), filas)
+
+
+def guardar_sistema_ot_item(engine, ot_item_id: int, sistema: str):
+    """Upsert -- mismo patrón que `_upsert`, elige el dialecto según el
+    backend (sqlite en desarrollo, postgres en producción)."""
+    insert_fn = pg_insert if engine.dialect.name == "postgresql" else sqlite_insert
+    with engine.begin() as conn:
+        stmt = insert_fn(ot_item_sistema).values(ot_item_id=ot_item_id, sistema=sistema)
+        stmt = stmt.on_conflict_do_update(index_elements=["ot_item_id"], set_={"sistema": sistema})
+        conn.execute(stmt)
+
+
+def guardar_foto_ot_item(engine, ot_item_id: int, momento: str, ruta: str):
+    with engine.begin() as conn:
+        conn.execute(ot_item_fotos.insert().values(ot_item_id=ot_item_id, momento=momento, ruta=ruta))
