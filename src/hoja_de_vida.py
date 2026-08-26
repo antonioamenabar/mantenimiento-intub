@@ -15,17 +15,22 @@ from src import ot_checklist
 
 
 def _completados(engine, patente: str, tipo_item: str) -> pd.DataFrame:
+    # El ítem cuenta apenas el mecánico lo marca "completada" (botón
+    # "Finalizar tarea" en Mis OTs) -- no hace falta esperar a que se
+    # cierre toda la OT, porque una OT puede traer varios ítems y el
+    # mecánico los va cerrando de a uno.
     stmt = (
         select(
             ot_items.c.id.label("ot_item_id"), ot_items.c.referencia, ot_items.c.descripcion,
-            ordenes_trabajo.c.numero_ot, ordenes_trabajo.c.completado_at,
-            ordenes_trabajo.c.completado_por, ordenes_trabajo.c.notas_cierre,
+            ordenes_trabajo.c.numero_ot,
+            ot_items.c.completado_at, ot_items.c.completado_por,
+            ordenes_trabajo.c.notas_cierre,
         )
         .join(ordenes_trabajo, ordenes_trabajo.c.id == ot_items.c.ot_id)
         .where(ot_items.c.patente == patente)
-        .where(ordenes_trabajo.c.estado == "completada")
+        .where(ot_items.c.estado == "completada")
         .where(ot_items.c.tipo_item == tipo_item)
-        .order_by(ordenes_trabajo.c.completado_at.desc())
+        .order_by(ot_items.c.completado_at.desc())
     )
     with engine.connect() as conn:
         return pd.read_sql(stmt, conn)
@@ -63,9 +68,14 @@ def detalle_item_completo(engine, ot_item_id: int) -> dict | None:
         select(
             ot_items.c.tipo_item, ot_items.c.referencia, ot_items.c.descripcion,
             ot_items.c.patente,
+            # completado_por/completado_at vienen del ítem, no de la OT --
+            # una OT puede cerrarse mucho después de que este ítem
+            # puntual ya estaba listo (o quedarse abierta con otros
+            # ítems pendientes), así que la fecha/quién correcta es la
+            # de este ítem.
+            ot_items.c.completado_por, ot_items.c.completado_at,
             ordenes_trabajo.c.numero_ot,
             ordenes_trabajo.c.creado_por, ordenes_trabajo.c.creado_at,
-            ordenes_trabajo.c.completado_por, ordenes_trabajo.c.completado_at,
             ordenes_trabajo.c.notas_cierre,
         )
         .join(ordenes_trabajo, ordenes_trabajo.c.id == ot_items.c.ot_id)

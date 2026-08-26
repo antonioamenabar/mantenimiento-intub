@@ -29,8 +29,15 @@ from src.db import (
 
 FOTOS_DIR = config.ROOT_DIR / "data" / "fotos_ot"
 
-ESTADOS_CHECKLIST = ["normal", "fuera_normal"]
-ESTADO_LABEL = {"normal": "Normal", "fuera_normal": "Fuera de Normal"}
+ESTADOS_CHECKLIST = ["normal", "fuera_normal", "no_aplica"]
+ESTADO_LABEL = {"normal": "Normal", "fuera_normal": "Fuera de Normal", "no_aplica": "No Aplica"}
+
+# Estados que exigen que el mecánico deje una observación obligatoria --
+# "Fuera de Normal" para describir qué encontró, "No Aplica" para que el
+# Jefe vaya aprendiendo en qué camiones ciertos ítems del checklist no
+# corresponden (sin tocar el catálogo: eso se decide a mano, no solo, por
+# eso no se borra nada automáticamente).
+ESTADOS_CON_OBSERVACION_OBLIGATORIA = {"fuera_normal", "no_aplica"}
 
 # Fuente: fichas R-PR03-09 (Inicio), R-PR03-07 (Fin), R-PR03-04 (Semanal).
 # (grupo, item), en el orden de la ficha impresa.

@@ -9,6 +9,12 @@ Pensada para completarse desde el celular o una tablet en terreno: layout
 su propio desplegable independiente (parte todo colapsado, se abre de a
 uno), y los campos apilados en vertical en vez de en columnas -- así no se
 achican al ancho de pantalla de un teléfono.
+
+Cada ítem (cada Inspección, Falla o Mantenimiento Programado) se puede
+"Finalizar" por separado -- no hace falta terminar toda la OT de una vez.
+Un ítem ya finalizado desaparece de la lista de pendientes. La OT completa
+se cierra aparte, con un botón propio; si queda algún ítem sin finalizar,
+pide obligatoriamente decir por qué antes de dejar cerrar.
 """
 import sys
 from pathlib import Path
@@ -70,10 +76,13 @@ def _render_checklist_inspeccion(ot_item_id: int, subtipo: str) -> list[dict]:
                 key=f"{prefijo}_estado",
             )
             observacion = None
-            if estado == "fuera_normal":
+            if estado in chk.ESTADOS_CON_OBSERVACION_OBLIGATORIA:
+                placeholder = (
+                    "Describe qué encontraste" if estado == "fuera_normal"
+                    else "Describe por qué no aplica en este camión"
+                )
                 observacion = st.text_input(
-                    "¿Qué encontraste? (obligatorio)", key=f"{prefijo}_obs",
-                    placeholder="Describe qué encontraste",
+                    "Observación (obligatoria)", key=f"{prefijo}_obs", placeholder=placeholder,
                 )
         respuestas.append({
             "catalogo_id": int(fila_cat["id"]), "item": fila_cat["item"], "estado": estado,
@@ -100,6 +109,16 @@ def _render_mantenimiento(ot_item_id: int) -> dict:
     return {"sistema": None, "foto_antes": foto_antes, "foto_despues": foto_despues, "horometro": horometro}
 
 
+def _errores_checklist(respuestas: list[dict]) -> list[str]:
+    errores = []
+    for r in respuestas:
+        if r["archivo"] is None:
+            errores.append(f"Falta foto en «{r['item']}».")
+        if r["estado"] in chk.ESTADOS_CON_OBSERVACION_OBLIGATORIA and not (r["observacion"] or "").strip():
+            errores.append(f"«{r['item']}» quedó {chk.ESTADO_LABEL[r['estado']]} -- falta la observación.")
+    return errores
+
+
 st.markdown(f"#### Pendientes ({len(pendientes)})")
 if pendientes.empty:
     st.info("No hay OTs pendientes.")
@@ -113,63 +132,81 @@ else:
         )
         with st.expander(titulo_ot, expanded=False):
             items = ot.items_de_ot(engine, fila["id"])
+            items_pendientes = items[items["estado"] != "completada"]
+            n_completados = len(items) - len(items_pendientes)
+            st.caption(f"✅ {n_completados} de {len(items)} tareas finalizadas")
 
-            # Cada ítem de la OT (cada checklist de inspección, cada falla,
-            # cada componente de mantenimiento, de cada camión) es su propio
-            # desplegable, colapsado por defecto -- el mecánico los va
-            # abriendo de a uno. El nombre del camión va en el título de
-            # cada ítem porque una misma OT puede traer varios camiones.
-            checklist_por_item = {}   # ot_item_id -> respuestas (solo inspección)
-            falla_mant_por_item = {}  # ot_item_id -> {sistema, foto_antes, foto_despues, horometro}
-
-            for _, it in items[items["tipo_item"] == "inspeccion"].iterrows():
+            # Cada ítem pendiente (cada checklist de inspección, cada
+            # falla, cada componente de mantenimiento, de cada camión) es
+            # su propio desplegable, colapsado por defecto, con su propio
+            # botón "Finalizar tarea" -- una vez finalizado desaparece de
+            # esta lista. El nombre del camión va en el título de cada
+            # ítem porque una misma OT puede traer varios camiones.
+            for _, it in items_pendientes[items_pendientes["tipo_item"] == "inspeccion"].iterrows():
                 nombre_camion = nombre_por_patente.get(it["patente"], it["patente"])
                 with st.expander(f"🔍 {it['referencia']} — {nombre_camion} ({it['patente']})", expanded=False):
-                    checklist_por_item[it["id"]] = _render_checklist_inspeccion(it["id"], it["referencia"])
+                    respuestas = _render_checklist_inspeccion(it["id"], it["referencia"])
+                    if st.button("✅ Finalizar tarea", key=f"fin_{it['id']}", width="stretch"):
+                        errores = _errores_checklist(respuestas)
+                        if errores:
+                            st.warning("No se pudo guardar:\n\n" + "\n\n".join(f"- {e}" for e in errores))
+                        else:
+                            chk.guardar_checklist_completo(engine, fila["id"], int(it["id"]), respuestas)
+                            ot.completar_item(engine, ot_item_id=int(it["id"]), completado_por=usuario["nombre"])
+                            flash("success", f"«{it['referencia']} — {nombre_camion}» finalizada.")
+                            st.rerun()
 
-            for _, it in items[items["tipo_item"] == "ticket"].iterrows():
+            for _, it in items_pendientes[items_pendientes["tipo_item"] == "ticket"].iterrows():
                 nombre_camion = nombre_por_patente.get(it["patente"], it["patente"])
                 with st.expander(f"⚠️ {it['descripcion'] or it['referencia']} — {nombre_camion} ({it['patente']})", expanded=False):
-                    falla_mant_por_item[it["id"]] = _render_falla(it["id"])
-
-            for _, it in items[items["tipo_item"] == "item_key"].iterrows():
-                nombre_camion = nombre_por_patente.get(it["patente"], it["patente"])
-                with st.expander(f"🛠️ {it['descripcion'] or it['referencia']} — {nombre_camion} ({it['patente']})", expanded=False):
-                    falla_mant_por_item[it["id"]] = _render_mantenimiento(it["id"])
-
-            notas = st.text_area("Notas de cierre (qué se hizo)", key=f"notas_{fila['id']}")
-
-            if st.button("✅ Marcar como completada", type="primary", key=f"completar_{fila['id']}", width="stretch"):
-                # Validación: cada ítem del checklist necesita foto, y si
-                # quedó "Fuera de Normal" además necesita la observación.
-                errores = []
-                for _ot_item_id, respuestas in checklist_por_item.items():
-                    for r in respuestas:
-                        if r["archivo"] is None:
-                            errores.append(f"Falta foto en «{r['item']}».")
-                        if r["estado"] == "fuera_normal" and not (r["observacion"] or "").strip():
-                            errores.append(f"«{r['item']}» quedó Fuera de Normal -- falta describir qué se encontró.")
-
-                if errores:
-                    st.warning("No se pudo guardar:\n\n" + "\n\n".join(f"- {e}" for e in errores))
-                else:
-                    for ot_item_id, respuestas in checklist_por_item.items():
-                        chk.guardar_checklist_completo(engine, fila["id"], ot_item_id, respuestas)
-
-                    horometros = {}
-                    for ot_item_id, datos in falla_mant_por_item.items():
+                    datos = _render_falla(it["id"])
+                    if st.button("✅ Finalizar tarea", key=f"fin_{it['id']}", width="stretch"):
                         chk.guardar_sistema_y_fotos(
-                            engine, fila["id"], ot_item_id,
+                            engine, fila["id"], int(it["id"]),
                             datos["sistema"], datos["foto_antes"], datos["foto_despues"],
                         )
-                        if datos["horometro"] is not None:
-                            horometros[ot_item_id] = int(datos["horometro"])
+                        ot.completar_item(engine, ot_item_id=int(it["id"]), completado_por=usuario["nombre"])
+                        flash("success", f"«{it['descripcion'] or it['referencia']} — {nombre_camion}» finalizada.")
+                        st.rerun()
 
+            for _, it in items_pendientes[items_pendientes["tipo_item"] == "item_key"].iterrows():
+                nombre_camion = nombre_por_patente.get(it["patente"], it["patente"])
+                with st.expander(f"🛠️ {it['descripcion'] or it['referencia']} — {nombre_camion} ({it['patente']})", expanded=False):
+                    datos = _render_mantenimiento(it["id"])
+                    if st.button("✅ Finalizar tarea", key=f"fin_{it['id']}", width="stretch"):
+                        chk.guardar_sistema_y_fotos(
+                            engine, fila["id"], int(it["id"]),
+                            None, datos["foto_antes"], datos["foto_despues"],
+                        )
+                        horometro = int(datos["horometro"]) if datos["horometro"] is not None else None
+                        ot.completar_item(
+                            engine, ot_item_id=int(it["id"]), completado_por=usuario["nombre"], horometro=horometro,
+                        )
+                        flash("success", f"«{it['descripcion'] or it['referencia']} — {nombre_camion}» finalizada.")
+                        st.rerun()
+
+            if items_pendientes.empty:
+                st.success("Todas las tareas de esta OT están finalizadas -- ya se puede cerrar.")
+
+            st.divider()
+            notas = st.text_area("Notas de cierre (opcional)", key=f"notas_{fila['id']}")
+            notas_pend = ""
+            if not items_pendientes.empty:
+                notas_pend = st.text_area(
+                    "¿Por qué quedan tareas pendientes? (obligatorio para cerrar así)",
+                    key=f"notas_pend_{fila['id']}",
+                    placeholder="Ej: falta repuesto, se reprograma para la próxima semana...",
+                )
+
+            if st.button("🔒 Cerrar OT", type="primary", key=f"cerrar_{fila['id']}", width="stretch"):
+                if not items_pendientes.empty and not notas_pend.strip():
+                    st.warning("Quedan tareas pendientes -- cuenta por qué antes de cerrar la OT.")
+                else:
                     ot.completar_ot(
-                        engine, ot_id=fila["id"],
-                        completado_por=usuario["nombre"], notas_cierre=notas, horometros=horometros,
+                        engine, ot_id=fila["id"], completado_por=usuario["nombre"],
+                        notas_cierre=notas, notas_pendientes=notas_pend,
                     )
-                    flash("success", f"{fila['numero_ot']} marcada como completada.")
+                    flash("success", f"{fila['numero_ot']} cerrada.")
                     st.rerun()
 
 with st.expander(f"Historial de completadas ({len(completadas)})"):
@@ -178,12 +215,15 @@ with st.expander(f"Historial de completadas ({len(completadas)})"):
     else:
         completadas_mostrar = completadas.copy()
         completadas_mostrar["tipo_trabajo"] = completadas_mostrar["tipo_trabajo"].map(ot.TIPO_TRABAJO_LABEL)
+        completadas_mostrar["notas_pendientes"] = completadas_mostrar["notas_pendientes"].fillna("—")
         st.dataframe(
             completadas_mostrar[[
-                "numero_ot", "patentes", "tipo_trabajo", "completado_at", "completado_por", "notas_cierre",
+                "numero_ot", "patentes", "tipo_trabajo", "completado_at", "completado_por",
+                "notas_cierre", "notas_pendientes",
             ]].rename(columns={
                 "numero_ot": "OT", "patentes": "Camiones", "tipo_trabajo": "Tipo",
                 "completado_at": "Completada", "completado_por": "Por", "notas_cierre": "Notas",
+                "notas_pendientes": "Tareas sin finalizar",
             }),
             hide_index=True, width="stretch",
         )

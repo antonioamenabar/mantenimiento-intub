@@ -118,14 +118,19 @@ def generar_certificado(detalle: dict, nombre_corto: str) -> bytes:
                 pdf.cell(0, 7, fila["grupo"], new_x="LMARGIN", new_y="NEXT")
                 grupo_anterior = fila["grupo"]
             estado_txt = ot_checklist.ESTADO_LABEL.get(fila["estado"], fila["estado"])
-            color = (176, 46, 38) if fila["estado"] == "fuera_normal" else (44, 122, 78)
+            if fila["estado"] == "fuera_normal":
+                color = (176, 46, 38)
+            elif fila["estado"] == "no_aplica":
+                color = (150, 120, 20)
+            else:
+                color = (44, 122, 78)
             pdf.set_font("Helvetica", "", 10)
             pdf.set_text_color(20, 20, 20)
             pdf.cell(90, 6, fila["item"])
             pdf.set_text_color(*color)
             pdf.set_font("Helvetica", "B", 10)
             pdf.cell(0, 6, estado_txt, new_x="LMARGIN", new_y="NEXT")
-            if fila["estado"] == "fuera_normal" and fila["observacion"]:
+            if fila["estado"] in ("fuera_normal", "no_aplica") and fila["observacion"]:
                 pdf.set_font("Helvetica", "I", 9)
                 pdf.set_text_color(*_GRIS)
                 pdf.multi_cell(0, 5, f"   {fila['observacion']}", new_x="LMARGIN", new_y="NEXT")

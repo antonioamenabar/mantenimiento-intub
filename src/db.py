@@ -199,6 +199,10 @@ def _migrar_columnas_nuevas(engine):
         ("ordenes_trabajo", "fecha_programada", "VARCHAR(10)"),
         ("ordenes_trabajo", "turno", "VARCHAR(10)"),
         ("ot_items", "patente", "VARCHAR(20)"),
+        ("ot_items", "estado", "VARCHAR(20)"),
+        ("ot_items", "completado_at", "TIMESTAMP"),
+        ("ot_items", "completado_por", "VARCHAR(60)"),
+        ("ordenes_trabajo", "notas_pendientes", "TEXT"),
     ]
 
     def _nombre_completo(tabla):
@@ -223,6 +227,15 @@ def _migrar_columnas_nuevas(engine):
                 f"UPDATE {oi} SET patente = (SELECT patente FROM {ot} WHERE {ot}.id = {oi}.ot_id) "
                 f"WHERE {oi}.patente IS NULL"
             ))
+            # Backfill de `estado` en ítems creados antes de que el mecánico
+            # pudiera ir cerrando tareas de una en una: si la OT ya estaba
+            # completada, sus ítems quedan "completada" (así no desaparecen
+            # de la Hoja de Vida); el resto queda "pendiente".
+            conn.execute(text(
+                f"UPDATE {oi} SET estado = 'completada' WHERE estado IS NULL "
+                f"AND ot_id IN (SELECT id FROM {ot} WHERE estado = 'completada')"
+            ))
+            conn.execute(text(f"UPDATE {oi} SET estado = 'pendiente' WHERE estado IS NULL"))
 
 
 def init_db(engine=None):
@@ -388,6 +401,9 @@ ordenes_trabajo = Table(
     Column("completado_at", DateTime, nullable=True),
     Column("completado_por", String(60), nullable=True),
     Column("notas_cierre", Text, nullable=True),
+    # Obligatorio (se valida en la UI) cuando la OT se cierra con ítems que
+    # quedaron sin marcar "completada" -- por qué no se terminaron.
+    Column("notas_pendientes", Text, nullable=True),
 )
 
 # Las tareas concretas dentro de una OT. Una misma OT puede traer ítems de
@@ -406,6 +422,12 @@ ot_items = Table(
     Column("tipo_item", String(30)),
     Column("referencia", String(60)),
     Column("descripcion", String(255), nullable=True),
+    # El mecánico puede ir cerrando las tareas de una OT de una en una, sin
+    # esperar a terminar toda la OT (ver `ordenes_trabajo.completar_item`).
+    # "pendiente" | "completada".
+    Column("estado", String(20), nullable=True),
+    Column("completado_at", DateTime, nullable=True),
+    Column("completado_por", String(60), nullable=True),
 )
 
 # ---------------------------------------------------------------------------
@@ -508,7 +530,14 @@ def crear_orden_trabajo(engine, ot: dict, items: list[dict]) -> int:
         result = conn.execute(ordenes_trabajo.insert().values(**ot))
         ot_id = result.inserted_primary_key[0]
         if items:
-            conn.execute(ot_items.insert(), [{**it, "ot_id": ot_id} for it in items])
+            # "estado": "pendiente" por defecto -- si se deja NULL, el
+            # filtro `!= "completada"` de `_referencias_asignadas` no lo
+            # cuenta como asignado (en SQL, NULL != valor da NULL, no
+            # verdadero), y quedaría suelto para asignarse dos veces.
+            conn.execute(
+                ot_items.insert(),
+                [{"estado": "pendiente", **it, "ot_id": ot_id} for it in items],
+            )
         return ot_id
 
 

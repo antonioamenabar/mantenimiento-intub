@@ -16,7 +16,7 @@ from datetime import datetime
 from email.mime.text import MIMEText
 
 import pandas as pd
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 
 from src.db import (
     mecanicos_talleres, ordenes_trabajo, ot_items, tickets,
@@ -103,6 +103,12 @@ def _referencias_asignadas(engine, tipo_item: str, patente: str) -> dict:
         .where(ot_items.c.tipo_item == tipo_item)
         .where(ot_items.c.patente == patente)
         .where(ordenes_trabajo.c.estado == "enviada")
+        # Si el mecánico ya cerró este ítem puntual (aunque el resto de la
+        # OT siga abierto), ya no cuenta como "asignado" -- el trabajo real
+        # ya se hizo. `or_` con `is_(None)` porque en SQL "NULL != valor"
+        # da NULL (no verdadero) y dejaría afuera del filtro, sin querer,
+        # a cualquier ítem viejo que no tenga `estado` seteado.
+        .where(or_(ot_items.c.estado.is_(None), ot_items.c.estado != "completada"))
     )
     with engine.connect() as conn:
         filas = conn.execute(stmt).fetchall()
@@ -334,32 +340,55 @@ def items_de_ot(engine, ot_id: int) -> pd.DataFrame:
         return pd.read_sql(stmt, conn)
 
 
-def completar_ot(
-    engine, ot_id: int, completado_por: str, notas_cierre: str = "",
-    horometros: dict[int, int] | None = None,
-):
-    """Marca la OT como completada. Los ítems de Mantenimiento Programado
-    que traiga (puede venir mezclada con Inspección y/o Fallas, de camiones
-    distintos) se traducen en un evento real por ítem, así el Dashboard se
-    actualiza solo -- los de Inspección/Fallas no necesitan nada más,
-    porque esas ya tienen su propia fuente de verdad en Datascope.
+def item_por_id(engine, ot_item_id: int) -> dict | None:
+    stmt = select(ot_items).where(ot_items.c.id == ot_item_id)
+    with engine.connect() as conn:
+        fila = conn.execute(stmt).mappings().first()
+    return dict(fila) if fila else None
 
-    `horometros` es {ot_item_id: horas} -- keyed por el id del ítem (no por
-    item_key) porque una misma OT puede traer el mismo componente para más
-    de un camión, y cada uno puede tener su propio horómetro.
+
+def completar_item(
+    engine, ot_item_id: int, completado_por: str,
+    horometro: int | None = None, notas: str = "",
+):
+    """Cierra UN ítem puntual de la OT, independiente del resto -- el
+    mecánico va marcando cada Inspección/Falla/Mantenimiento como
+    "Finalizar tarea" a medida que las termina, sin esperar a cerrar toda
+    la OT. Si es un ítem de Mantenimiento Programado, registra el evento
+    real ahí mismo (no se espera al cierre de la OT completa), así el
+    Dashboard se entera apenas se hace el trabajo.
     """
+    ahora = datetime.now()
+    fila_item = item_por_id(engine, ot_item_id)
+    with engine.begin() as conn:
+        conn.execute(
+            ot_items.update().where(ot_items.c.id == ot_item_id)
+            .values(estado="completada", completado_at=ahora, completado_por=completado_por)
+        )
+    if fila_item and fila_item["tipo_item"] == "item_key":
+        planificacion.registrar_evento(
+            engine, patente=fila_item["patente"], items=[fila_item["referencia"]], fecha=ahora.date(),
+            horometro=horometro, tecnico=completado_por,
+            detalle=notas, registrado_por=completado_por, ot_item_id=ot_item_id,
+        )
+
+
+def completar_ot(engine, ot_id: int, completado_por: str, notas_cierre: str = "", notas_pendientes: str = ""):
+    """Cierra la OT completa. Los ítems que el mecánico ya fue marcando con
+    `completar_item` quedan tal cual (con su propia fecha y quién los
+    hizo); si queda alguno todavía "pendiente", `notas_pendientes` es
+    obligatorio (se valida en la UI, y de nuevo acá por si se llama
+    directo) -- así queda registrado por qué no se alcanzó a terminar.
+    """
+    items = items_de_ot(engine, ot_id)
+    pendientes = items[items["estado"] != "completada"]
+    if not pendientes.empty and not (notas_pendientes or "").strip():
+        raise ValueError(
+            "Quedan tareas pendientes en esta OT -- hay que explicar por qué antes de cerrarla."
+        )
     ahora = datetime.now()
     actualizar_estado_ot(
         engine, ot_id, estado="completada", completado_at=ahora,
         completado_por=completado_por, notas_cierre=notas_cierre or None,
+        notas_pendientes=notas_pendientes or None,
     )
-    horometros = horometros or {}
-    items = items_de_ot(engine, ot_id)
-    items_mant = items[items["tipo_item"] == "item_key"]
-    for _, fila_item in items_mant.iterrows():
-        ot_item_id = int(fila_item["id"])
-        planificacion.registrar_evento(
-            engine, patente=fila_item["patente"], items=[fila_item["referencia"]], fecha=ahora.date(),
-            horometro=horometros.get(ot_item_id), tecnico=completado_por,
-            detalle=notas_cierre, registrado_por=completado_por, ot_item_id=ot_item_id,
-        )
