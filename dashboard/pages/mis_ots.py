@@ -1,8 +1,8 @@
 """Mis OTs - Intub
 
 Un mecánico interno ve solo las OTs que le asignaron y las marca como
-completadas. El Jefe ve todas (útil para cerrar a mano las de un taller
-externo, que no tiene sesión propia, cuando avisa que terminó).
+completadas. Supervisor/Admin ven todas (útil para cerrar a mano las de
+un taller externo, que no tiene sesión propia, cuando avisa que terminó).
 
 Pensada para completarse desde el celular o una tablet en terreno: layout
 "centered" (más cómodo de leer angosto que "wide"), cada ítem de la OT en
@@ -28,11 +28,17 @@ from src.bootstrap import get_engine
 from src.flash import flash, mostrar_flash
 from src.queries import opciones_patentes
 
-st.set_page_config(page_title="Mis OTs - Intub", layout="centered")
-
 engine = get_engine()
-usuario = auth.requerir_login(rol_requerido=("mecanico",) + auth.ROLES_GESTION)
-es_gestion = usuario["rol"] in auth.ROLES_GESTION
+usuario = auth.requerir_login(rol_requerido=("mecanico",) + auth.ROLES_OPERACION)
+es_gestion = usuario["rol"] in auth.ROLES_OPERACION
+
+# El layout general de la app es "wide" (lo necesitan Dashboard, Software,
+# etc.), pero esta página se lee mejor angosta -- se completa desde el
+# celular en terreno -- así que acá se fuerza un ancho tipo "centered".
+st.markdown(
+    "<style>.block-container { max-width: 730px; }</style>",
+    unsafe_allow_html=True,
+)
 
 st.markdown("<h1 style='text-align:center;'>📝 Mis OTs</h1>", unsafe_allow_html=True)
 mostrar_flash()

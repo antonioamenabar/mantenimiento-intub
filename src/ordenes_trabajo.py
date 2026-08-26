@@ -413,7 +413,7 @@ def completar_ot(engine, ot_id: int, completado_por: str, notas_cierre: str = ""
 
 
 def cancelar_ot(engine, ot_id: int, motivo: str = ""):
-    """Cancela la OT completa (la usa el Jefe/Supervisor desde "Mis OTs").
+    """Cancela la OT completa (la usa el Supervisor/Admin desde "Mis OTs").
     Los ítems que el mecánico ya había finalizado con `completar_item` NO
     se tocan -- ese trabajo ya quedó hecho y registrado (fotos, eventos de
     mantenimiento, Hoja de Vida). Los que seguían "pendiente" se marcan

@@ -1,12 +1,12 @@
-"""Autenticación simple para el Software de Mantenimiento -- cuatro roles:
-"jefe" y "supervisor" (equivalentes: crean/asignan/cancelan OTs, ven el
-Dashboard, administran mecánicos y talleres -- la diferencia es solo de
-cargo), "mecanico" (ve y completa solo las OTs que le asignaron) y "admin"
-(no opera OTs -- solo crea y administra las cuentas de Jefe/Supervisor).
-Pensado para una app interna de uso local por un puñado de personas, no
-para exposición a internet -- por eso es una tabla propia con contraseña
-hasheada (PBKDF2, sin dependencias extra), en vez de un proveedor de
-identidad externo.
+"""Autenticación simple para el Software de Mantenimiento -- tres roles:
+"supervisor" (crea/asigna/cancela OTs, ve el Dashboard, y -- junto con
+"admin" -- administra mecánicos y talleres externos), "mecanico" (ve y
+completa solo las OTs que le asignaron) y "admin" (puede ver y hacer todo
+lo que hace "supervisor", y además es el único que puede crear/editar
+otras cuentas de Supervisor). Pensado para una app interna de uso local
+por un puñado de personas, no para exposición a internet -- por eso es
+una tabla propia con contraseña hasheada (PBKDF2, sin dependencias
+extra), en vez de un proveedor de identidad externo.
 """
 import hashlib
 import os
@@ -19,15 +19,17 @@ from src.db import usuarios, crear_usuario, actualizar_password
 
 _ITERACIONES = 200_000
 
-# Roles que pueden crear/cancelar OTs y administrar mecánicos/talleres --
-# "jefe" y "supervisor" tienen exactamente las mismas capacidades sobre el
-# Software de Mantenimiento.
-ROLES_GESTION = ("jefe", "supervisor")
+# El único rol "operativo" hoy es "supervisor" (reemplazó a "jefe", que ya
+# no existe -- ver migración en `db._migrar_columnas_nuevas`).
+ROLES_GESTION = ("supervisor",)
 
-ROL_LABEL = {
-    "jefe": "Jefe de Mantenimiento", "supervisor": "Supervisor",
-    "mecanico": "Mecánico", "admin": "Administrador",
-}
+# "admin" ve y hace todo lo que "supervisor" -- se usa para las páginas
+# operativas (Dashboard, Software, Mis OTs, Administración). La única
+# diferencia entre ambos vive DENTRO de Administración: solo "admin"
+# puede crear/editar cuentas de Supervisor.
+ROLES_OPERACION = ("admin",) + ROLES_GESTION
+
+ROL_LABEL = {"supervisor": "Supervisor", "mecanico": "Mecánico", "admin": "Administrador"}
 
 
 def _hash_password(password: str, sal: str | None = None) -> str:
@@ -44,12 +46,12 @@ def _verificar_password(password: str, password_hash: str) -> bool:
     return _hash_password(password, sal) == password_hash
 
 
-def seed_jefe_inicial(engine, username="jefe", password="cambiar123", nombre="Jefe de Mantenimiento"):
-    """Crea los primeros usuarios ("jefe" y "admin") si la tabla
+def seed_usuarios_iniciales(engine, username="supervisor", password="cambiar123", nombre="Supervisor"):
+    """Crea los primeros usuarios ("supervisor" y "admin") si la tabla
     `usuarios` está vacía -- así hay cómo entrar la primera vez. La
     contraseña por defecto es intencionalmente obvia; hay que cambiarla
     desde "Mi cuenta" apenas se entra. El "admin" es quien de ahí en
-    adelante crea las cuentas de Jefe/Supervisor (ver `crear_usuario_gestion`).
+    adelante crea nuevas cuentas de Supervisor (ver `crear_usuario_gestion`).
     """
     with engine.connect() as conn:
         alguno = conn.execute(select(usuarios.c.id)).fetchone()
@@ -57,7 +59,7 @@ def seed_jefe_inicial(engine, username="jefe", password="cambiar123", nombre="Je
         return
     crear_usuario(
         engine, username=username, password_hash=_hash_password(password),
-        nombre=nombre, rol="jefe", created_at=datetime.now(),
+        nombre=nombre, rol="supervisor", created_at=datetime.now(),
     )
     crear_usuario(
         engine, username="admin", password_hash=_hash_password(password),
@@ -72,14 +74,12 @@ def crear_usuario_mecanico(engine, username: str, password: str, nombre: str) ->
     )
 
 
-def crear_usuario_gestion(engine, username: str, password: str, nombre: str, rol: str) -> int:
-    """Crea una cuenta "jefe" o "supervisor" -- lo usa el Administrador
-    desde la página de Administración."""
-    if rol not in ROLES_GESTION:
-        raise ValueError(f"Rol inválido para una cuenta de gestión: {rol}")
+def crear_usuario_gestion(engine, username: str, password: str, nombre: str) -> int:
+    """Crea una cuenta de Supervisor -- lo usa el Administrador desde la
+    página de Administración."""
     return crear_usuario(
         engine, username=username, password_hash=_hash_password(password),
-        nombre=nombre, rol=rol, created_at=datetime.now(),
+        nombre=nombre, rol="supervisor", created_at=datetime.now(),
     )
 
 

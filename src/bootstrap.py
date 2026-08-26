@@ -14,6 +14,6 @@ def get_engine():
     engine = db.init_db()
     planificacion.seed_catalogo_y_reglas(engine)
     planificacion.seed_componentes_conocidos_si_vacio(engine)
-    auth.seed_jefe_inicial(engine)
+    auth.seed_usuarios_iniciales(engine)
     ot_checklist.seed_checklist_catalogo(engine)
     return engine

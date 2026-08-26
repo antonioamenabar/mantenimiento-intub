@@ -16,10 +16,8 @@ from src import auth, planificacion
 from src.bootstrap import get_engine
 from src.queries import opciones_patentes
 
-st.set_page_config(page_title="Programa de Mantenimiento - Intub", layout="wide")
-
 engine = get_engine()
-usuario = auth.requerir_login(rol_requerido=auth.ROLES_GESTION)
+usuario = auth.requerir_login(rol_requerido=auth.ROLES_OPERACION)
 
 st.markdown("<h1 style='text-align:center;'>🗓️ Programa de Mantenimiento</h1>", unsafe_allow_html=True)
 st.caption(

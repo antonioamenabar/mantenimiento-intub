@@ -2,7 +2,7 @@
 4 cuadrantes: Inspecciones | Fallas | Mantenimiento Programado | Inventario
 
 Esta página NO registra nada -- para crear y asignar trabajo, ver
-"Software de Mantenimiento". Para completar una OT asignada, ver "Mis OTs".
+"Crear OT" (dentro de Software). Para completar una OT asignada, ver "Mis OTs".
 """
 import sys
 from datetime import timedelta
@@ -15,10 +15,8 @@ import streamlit as st
 from src import auth, queries, planificacion
 from src.bootstrap import get_engine
 
-st.set_page_config(page_title="Dashboard Mantenimiento - Intub", layout="wide")
-
 engine = get_engine()
-auth.requerir_login(rol_requerido=auth.ROLES_GESTION)
+auth.requerir_login(rol_requerido=auth.ROLES_OPERACION)
 
 st.markdown(
     """

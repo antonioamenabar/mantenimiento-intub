@@ -259,6 +259,14 @@ def _migrar_columnas_nuevas(engine):
                 f"AND id NOT IN (SELECT DISTINCT ot_id FROM {oa})"
             ))
 
+    # Backfill: el rol "jefe" se eliminó -- toda cuenta que lo tuviera pasa
+    # a "supervisor" (mismas capacidades, es solo el mismo rol con otro
+    # nombre). Idempotente: después de la primera vez no queda ningún
+    # "jefe" por convertir.
+    if "usuarios" in tablas_existentes:
+        with engine.begin() as conn:
+            conn.execute(text(f"UPDATE {_nombre_completo('usuarios')} SET rol = 'supervisor' WHERE rol = 'jefe'"))
+
 
 def init_db(engine=None):
     """Crea el esquema (solo Postgres) y las tablas si no existen, y migra
@@ -369,9 +377,10 @@ def insertar_eventos_mantenimiento(engine, filas: list[dict]):
 
 
 # ---------------------------------------------------------------------------
-# Software de Mantenimiento: usuarios (Jefe / Mecánicos con sesión propia),
-# mecánicos internos + talleres externos, y Órdenes de Trabajo (OT) con sus
-# ítems. Esto es el sistema donde se CREA y ASIGNA el trabajo -- distinto
+# Software de Mantenimiento: usuarios (Admin / Supervisor / Mecánicos con
+# sesión propia), mecánicos internos + talleres externos, y Órdenes de
+# Trabajo (OT) con sus ítems. Esto es el sistema donde se CREA y ASIGNA
+# el trabajo -- distinto
 # del Dashboard (solo lectura) y de `eventos_mantenimiento` (el registro de
 # lo que ya se hizo, que una OT de Mantenimiento Programado completada
 # termina alimentando).
@@ -384,7 +393,7 @@ usuarios = Table(
     Column("username", String(60), unique=True),
     Column("password_hash", String(160)),
     Column("nombre", String(120)),
-    Column("rol", String(20)),  # "jefe" | "supervisor" | "mecanico" | "admin"
+    Column("rol", String(20)),  # "supervisor" | "mecanico" | "admin"
     Column("activo", Boolean, default=True),
     Column("created_at", DateTime),
 )
@@ -429,7 +438,7 @@ ordenes_trabajo = Table(
     # Obligatorio (se valida en la UI) cuando la OT se cierra con ítems que
     # quedaron sin marcar "completada" -- por qué no se terminaron.
     Column("notas_pendientes", Text, nullable=True),
-    # Motivo (opcional) cuando el Jefe/Supervisor cancela la OT -- ver
+    # Motivo (opcional) cuando el Supervisor/Admin cancela la OT -- ver
     # `ordenes_trabajo.cancelar_ot` en el módulo del mismo nombre.
     Column("motivo_cancelacion", Text, nullable=True),
 )
