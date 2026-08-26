@@ -394,19 +394,11 @@ def programa_mantenimiento(engine) -> pd.DataFrame:
     return pd.DataFrame(filas)
 
 
-def tabla_item_por_patente(engine, item_key: str) -> pd.DataFrame:
-    """Para UN componente, una fila por cada camión de la flota con la
-    regla que le aplica hoy -- la más específica primero: por camión >
-    por marca/modelo del componente instalado > genérica. Para la vista
-    "Camión x intervalo" de Programa de Mantención (a diferencia de
-    `programa_mantenimiento`, que agrupa por regla; esta agrupa por
-    camión, uno por fila, siempre).
-    """
-    flota_df = _load_flota(engine)
-    reglas_df = _cargar_reglas(engine)
-    reglas_patentes_df = _cargar_reglas_patentes(engine)
-    componentes_df = _cargar_componentes(engine)
-
+def _tabla_item_por_patente_calc(item_key, flota_df, reglas_df, reglas_patentes_df, componentes_df) -> pd.DataFrame:
+    """El cálculo puro (sin consultas) de `tabla_item_por_patente` --
+    separado para poder reusar las mismas 4 tablas ya cargadas en
+    `todos_items_por_patente` en vez de volver a consultarlas por cada
+    ítem (ver esa función para el motivo)."""
     filas = []
     for _, camion in flota_df.iterrows():
         patente = camion["patente"]
@@ -432,6 +424,43 @@ def tabla_item_por_patente(engine, item_key: str) -> pd.DataFrame:
             "es_especifica": es_especifica,
         })
     return pd.DataFrame(filas)
+
+
+def tabla_item_por_patente(engine, item_key: str) -> pd.DataFrame:
+    """Para UN componente, una fila por cada camión de la flota con la
+    regla que le aplica hoy -- la más específica primero: por camión >
+    por marca/modelo del componente instalado > genérica. Para la vista
+    "Camión x intervalo" de Programa de Mantención (a diferencia de
+    `programa_mantenimiento`, que agrupa por regla; esta agrupa por
+    camión, uno por fila, siempre). Si necesitas la tabla de VARIOS
+    ítems (ej. toda la página), usa `todos_items_por_patente` -- evita
+    repetir las mismas 4 consultas por cada ítem.
+    """
+    flota_df = _load_flota(engine)
+    reglas_df = _cargar_reglas(engine)
+    reglas_patentes_df = _cargar_reglas_patentes(engine)
+    componentes_df = _cargar_componentes(engine)
+    return _tabla_item_por_patente_calc(item_key, flota_df, reglas_df, reglas_patentes_df, componentes_df)
+
+
+def todos_items_por_patente(engine) -> dict[str, pd.DataFrame]:
+    """Igual que `tabla_item_por_patente`, pero para TODOS los ítems del
+    catálogo a la vez -- carga la flota/reglas/componentes una sola vez y
+    arma cada tabla en memoria, en vez de repetir las mismas 4 consultas
+    por cada ítem. `st.expander` en Streamlit ejecuta el contenido de su
+    bloque aunque esté colapsado (no es "carga perezosa"), así que la
+    página de Programa de Mantención llamaba esto 14 veces -- con las 4
+    consultas de cada una, 56 viajes a la base solo para pintarse.
+    """
+    items_df = catalogo_items(engine)
+    flota_df = _load_flota(engine)
+    reglas_df = _cargar_reglas(engine)
+    reglas_patentes_df = _cargar_reglas_patentes(engine)
+    componentes_df = _cargar_componentes(engine)
+    return {
+        item_key: _tabla_item_por_patente_calc(item_key, flota_df, reglas_df, reglas_patentes_df, componentes_df)
+        for item_key in items_df["item_key"]
+    }
 
 
 def guardar_regla_patentes(

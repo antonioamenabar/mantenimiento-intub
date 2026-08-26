@@ -39,20 +39,33 @@ if items_df.empty:
     st.info("Todavía no hay catálogo de componentes cargado.")
     st.stop()
 
+# Una sola pasada de consultas para TODOS los ítems -- `st.expander` en
+# Streamlit ejecuta su contenido aunque esté colapsado (no es "carga
+# perezosa"), así que si cada ítem consultara la base por su cuenta acá
+# adentro, la página haría ~4 consultas x 14 ítems = 56 viajes a la base
+# en cada carga. `todos_items_por_patente` carga las tablas base una vez
+# y arma cada tabla en memoria.
+tablas_por_item = planificacion.todos_items_por_patente(engine)
+
+# "Comprimir todo": en vez de sobrescribir el estado de cada `st.expander`
+# uno por uno (con `key` fijo, no siempre sincroniza al toque), se cambia
+# la clave de TODOS los expanders a una nueva que nunca existió -- así
+# vuelven solos a su valor por defecto (`expanded=False`), sin ambigüedad.
+if "prog_reset_gen" not in st.session_state:
+    st.session_state["prog_reset_gen"] = 0
+_gen = st.session_state["prog_reset_gen"]
+
 
 def _key_categoria(categoria: str) -> str:
-    return f"prog_cat_{categoria}"
+    return f"prog_cat_{categoria}_{_gen}"
 
 
 def _key_item(item_key: str) -> str:
-    return f"prog_item_{item_key}"
+    return f"prog_item_{item_key}_{_gen}"
 
 
 if st.button("🗂️ Comprimir todo", key="prog_comprimir_todo"):
-    for categoria in planificacion.CATEGORIA_LABEL:
-        st.session_state[_key_categoria(categoria)] = False
-    for _, item in items_df.iterrows():
-        st.session_state[_key_item(item["item_key"])] = False
+    st.session_state["prog_reset_gen"] += 1
     st.rerun()
 
 for categoria in ("camion", "equipo"):
@@ -64,7 +77,7 @@ for categoria in ("camion", "equipo"):
         for _, item in items_cat.iterrows():
             item_key = item["item_key"]
             with st.expander(item["nombre"], expanded=False, key=_key_item(item_key)):
-                tabla = planificacion.tabla_item_por_patente(engine, item_key)
+                tabla = tablas_por_item[item_key]
 
                 with st.popover("✏️ Editar varios camiones a la vez", key=f"prog_masivo_{item_key}"):
                     st.caption(
