@@ -43,18 +43,52 @@ st.markdown(
 st.markdown("<h1 style='text-align:center;'>📝 Mis OTs</h1>", unsafe_allow_html=True)
 mostrar_flash()
 
+# Streamlit rehace todo el script en CADA interacción -- incluso elegir un
+# radio "Fuera de Normal" para que aparezca el cuadro de Observación, sin
+# guardar nada todavía. Sin caché, eso significaba volver a consultar toda
+# la lista de OTs, sus ítems, y el catálogo del checklist (fijo, no
+# cambia) en cada clic -- muy notorio desde el celular en terreno. Se
+# limpia a mano (`.clear()`) apenas se completa/cierra/cancela algo, para
+# que el cambio se vea de inmediato sin esperar el TTL.
+@st.cache_data(ttl=30, show_spinner=False)
+def _cargar_tabla_ots(_engine, usuario_id, es_gestion):
+    return ot.ots_todas(_engine) if es_gestion else ot.ots_de_usuario(_engine, usuario_id)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cargar_items_ot(_engine, ot_id):
+    return ot.items_de_ot(_engine, ot_id)
+
+
+@st.cache_data(show_spinner=False)
+def _catalogo_checklist(_engine, subtipo):
+    # El catálogo del checklist (R-PR03-09/07/04) es fijo -- no tiene
+    # sentido ni TTL, se recarga solo si se reinicia el servidor.
+    return chk.catalogo_para_subtipo(_engine, subtipo)
+
+
+@st.cache_data(show_spinner=False)
+def _nombres_por_patente(_engine):
+    df = opciones_patentes(_engine)
+    return dict(zip(df["patente"], df["nombre_corto"]))
+
+
+def _limpiar_cache_ots():
+    _cargar_tabla_ots.clear()
+    _cargar_items_ot.clear()
+
+
+tabla = _cargar_tabla_ots(engine, usuario["id"], es_gestion)
 if es_gestion:
-    tabla = ot.ots_todas(engine)
     st.caption("Todas las OTs -- útil para cerrar a mano las de un taller externo cuando avisa que terminó.")
 else:
-    tabla = ot.ots_de_usuario(engine, usuario["id"])
     st.caption("OTs asignadas a ti.")
 
 if tabla.empty:
     st.info("No hay OTs para mostrar.")
     st.stop()
 
-nombre_por_patente = dict(zip(opciones_patentes(engine)["patente"], opciones_patentes(engine)["nombre_corto"]))
+nombre_por_patente = _nombres_por_patente(engine)
 
 pendientes = tabla[tabla["estado"] == "enviada"]
 completadas = tabla[tabla["estado"] == "completada"]
@@ -67,7 +101,7 @@ def _render_checklist_inspeccion(ot_item_id: int, subtipo: str) -> tuple[list[di
     completarse con el dedo en un celular, no lado a lado en columnas.
     Devuelve (respuestas, comentario general de toda la ficha).
     """
-    catalogo = chk.catalogo_para_subtipo(engine, subtipo)
+    catalogo = _catalogo_checklist(engine, subtipo)
     respuestas = []
     grupo_anterior = None
     for _, fila_cat in catalogo.iterrows():
@@ -155,7 +189,7 @@ else:
             f"{ot.TIPO_TRABAJO_LABEL.get(fila['tipo_trabajo'], fila['tipo_trabajo'])}"
         )
         with st.expander(titulo_ot, expanded=False):
-            items = ot.items_de_ot(engine, fila["id"])
+            items = _cargar_items_ot(engine, fila["id"])
             items_pendientes = items[items["estado"] != "completada"]
             n_completados = len(items) - len(items_pendientes)
             st.caption(f"✅ {n_completados} de {len(items)} tareas finalizadas")
@@ -180,6 +214,7 @@ else:
                                 engine, ot_item_id=int(it["id"]), completado_por=usuario["nombre"],
                                 comentario=comentario_insp,
                             )
+                            _limpiar_cache_ots()
                             flash("success", f"«{it['referencia']} — {nombre_camion}» finalizada.")
                             st.rerun()
 
@@ -196,6 +231,7 @@ else:
                             engine, ot_item_id=int(it["id"]), completado_por=usuario["nombre"],
                             comentario=datos["comentario"],
                         )
+                        _limpiar_cache_ots()
                         flash("success", f"«{it['descripcion'] or it['referencia']} — {nombre_camion}» finalizada.")
                         st.rerun()
 
@@ -213,6 +249,7 @@ else:
                             engine, ot_item_id=int(it["id"]), completado_por=usuario["nombre"],
                             horometro=horometro, comentario=datos["comentario"],
                         )
+                        _limpiar_cache_ots()
                         flash("success", f"«{it['descripcion'] or it['referencia']} — {nombre_camion}» finalizada.")
                         st.rerun()
 
@@ -237,6 +274,7 @@ else:
                         engine, ot_id=fila["id"], completado_por=usuario["nombre"],
                         notas_cierre=notas, notas_pendientes=notas_pend,
                     )
+                    _limpiar_cache_ots()
                     flash("success", f"{fila['numero_ot']} cerrada.")
                     st.rerun()
 
@@ -249,6 +287,7 @@ else:
                     motivo_cancel = st.text_area("Motivo (opcional)", key=f"motivo_cancel_{fila['id']}")
                     if st.button("Confirmar cancelación", key=f"cancelar_{fila['id']}", width="stretch"):
                         ot.cancelar_ot(engine, ot_id=fila["id"], motivo=motivo_cancel)
+                        _limpiar_cache_ots()
                         flash("success", f"{fila['numero_ot']} cancelada.")
                         st.rerun()
 
