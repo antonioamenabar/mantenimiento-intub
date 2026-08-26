@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+import pandas as pd
 import streamlit as st
 
 from src import auth, planificacion
@@ -77,16 +78,23 @@ for categoria in ("camion", "equipo"):
                         with st.popover("✏️", key=f"prog_editar_{item_key}_{fila['patente']}"):
                             st.caption(f"{fila['nombre_corto']} ({fila['patente']}) -- {item['nombre']}")
                             col_horas, col_dias = st.columns(2)
+                            # pd.notna(): si la regla puntual solo definió horas (o
+                            # solo días), el otro campo llega NULL -- y por cómo pandas
+                            # mezcla NULL con números reales en la misma columna, puede
+                            # llegar como NaN en vez de None; un `if valor:` a secas no
+                            # lo filtra (NaN es "verdadero"), e int(nan) revienta.
+                            horas_val = fila["intervalo_horas"]
+                            dias_val = fila["intervalo_dias"]
                             with col_horas:
                                 horas_edit = st.number_input(
                                     "Horas", min_value=0, step=10,
-                                    value=int(fila["intervalo_horas"]) if fila["es_especifica"] and fila["intervalo_horas"] else 0,
+                                    value=int(horas_val) if fila["es_especifica"] and pd.notna(horas_val) and horas_val else 0,
                                     key=f"prog_horas_{item_key}_{fila['patente']}",
                                 )
                             with col_dias:
                                 dias_edit = st.number_input(
                                     "Días calendario", min_value=0, step=10,
-                                    value=int(fila["intervalo_dias"]) if fila["es_especifica"] and fila["intervalo_dias"] else 0,
+                                    value=int(dias_val) if fila["es_especifica"] and pd.notna(dias_val) and dias_val else 0,
                                     key=f"prog_dias_{item_key}_{fila['patente']}",
                                 )
                             if st.button("Guardar", type="primary", key=f"prog_guardar_{item_key}_{fila['patente']}", width="stretch"):
