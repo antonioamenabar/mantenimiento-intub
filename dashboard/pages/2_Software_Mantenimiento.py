@@ -20,7 +20,7 @@ from src.queries import opciones_patentes, PRIORIDAD_LABEL
 st.set_page_config(page_title="Software de Mantenimiento - Intub", layout="wide")
 
 engine = get_engine()
-usuario = auth.requerir_login(rol_requerido="jefe")
+usuario = auth.requerir_login(rol_requerido=auth.ROLES_GESTION)
 
 st.markdown("<h1 style='text-align:center;'>🧰 Software de Mantenimiento</h1>", unsafe_allow_html=True)
 mostrar_flash()

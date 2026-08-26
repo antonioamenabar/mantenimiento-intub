@@ -31,17 +31,18 @@ from src.queries import opciones_patentes
 st.set_page_config(page_title="Mis OTs - Intub", layout="centered")
 
 engine = get_engine()
-usuario = auth.requerir_login()
+usuario = auth.requerir_login(rol_requerido=("mecanico",) + auth.ROLES_GESTION)
+es_gestion = usuario["rol"] in auth.ROLES_GESTION
 
 st.markdown("<h1 style='text-align:center;'>📝 Mis OTs</h1>", unsafe_allow_html=True)
 mostrar_flash()
 
-if usuario["rol"] == "mecanico":
-    tabla = ot.ots_de_usuario(engine, usuario["id"])
-    st.caption("OTs asignadas a ti.")
-else:
+if es_gestion:
     tabla = ot.ots_todas(engine)
     st.caption("Todas las OTs -- útil para cerrar a mano las de un taller externo cuando avisa que terminó.")
+else:
+    tabla = ot.ots_de_usuario(engine, usuario["id"])
+    st.caption("OTs asignadas a ti.")
 
 if tabla.empty:
     st.info("No hay OTs para mostrar.")
@@ -51,6 +52,7 @@ nombre_por_patente = dict(zip(opciones_patentes(engine)["patente"], opciones_pat
 
 pendientes = tabla[tabla["estado"] == "enviada"]
 completadas = tabla[tabla["estado"] == "completada"]
+canceladas = tabla[tabla["estado"] == "cancelada"]
 
 
 def _render_checklist_inspeccion(ot_item_id: int, subtipo: str) -> tuple[list[dict], str]:
@@ -232,6 +234,18 @@ else:
                     flash("success", f"{fila['numero_ot']} cerrada.")
                     st.rerun()
 
+            if es_gestion:
+                with st.popover("🚫 Cancelar OT", width="stretch"):
+                    st.caption(
+                        "Las tareas ya finalizadas no se tocan. Las que sigan pendientes quedan "
+                        "libres para poder asociarse a una OT nueva."
+                    )
+                    motivo_cancel = st.text_area("Motivo (opcional)", key=f"motivo_cancel_{fila['id']}")
+                    if st.button("Confirmar cancelación", key=f"cancelar_{fila['id']}", width="stretch"):
+                        ot.cancelar_ot(engine, ot_id=fila["id"], motivo=motivo_cancel)
+                        flash("success", f"{fila['numero_ot']} cancelada.")
+                        st.rerun()
+
 with st.expander(f"Historial de completadas ({len(completadas)})"):
     if completadas.empty:
         st.info("Todavía no hay OTs completadas.")
@@ -247,6 +261,23 @@ with st.expander(f"Historial de completadas ({len(completadas)})"):
                 "numero_ot": "OT", "patentes": "Camiones", "asignados_nombres": "Asignado a", "tipo_trabajo": "Tipo",
                 "completado_at": "Completada", "completado_por": "Por", "notas_cierre": "Notas",
                 "notas_pendientes": "Tareas sin finalizar",
+            }),
+            hide_index=True, width="stretch",
+        )
+
+with st.expander(f"Canceladas ({len(canceladas)})"):
+    if canceladas.empty:
+        st.info("Todavía no hay OTs canceladas.")
+    else:
+        canceladas_mostrar = canceladas.copy()
+        canceladas_mostrar["tipo_trabajo"] = canceladas_mostrar["tipo_trabajo"].map(ot.TIPO_TRABAJO_LABEL)
+        canceladas_mostrar["motivo_cancelacion"] = canceladas_mostrar["motivo_cancelacion"].fillna("—")
+        st.dataframe(
+            canceladas_mostrar[[
+                "numero_ot", "patentes", "asignados_nombres", "tipo_trabajo", "creado_at", "motivo_cancelacion",
+            ]].rename(columns={
+                "numero_ot": "OT", "patentes": "Camiones", "asignados_nombres": "Asignado a", "tipo_trabajo": "Tipo",
+                "creado_at": "Creada", "motivo_cancelacion": "Motivo",
             }),
             hide_index=True, width="stretch",
         )

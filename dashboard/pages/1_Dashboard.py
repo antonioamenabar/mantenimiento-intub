@@ -18,7 +18,7 @@ from src.bootstrap import get_engine
 st.set_page_config(page_title="Dashboard Mantenimiento - Intub", layout="wide")
 
 engine = get_engine()
-auth.requerir_login(rol_requerido="jefe")
+auth.requerir_login(rol_requerido=auth.ROLES_GESTION)
 
 st.markdown(
     """

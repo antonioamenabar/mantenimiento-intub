@@ -410,3 +410,26 @@ def completar_ot(engine, ot_id: int, completado_por: str, notas_cierre: str = ""
         completado_por=completado_por, notas_cierre=notas_cierre or None,
         notas_pendientes=notas_pendientes or None,
     )
+
+
+def cancelar_ot(engine, ot_id: int, motivo: str = ""):
+    """Cancela la OT completa (la usa el Jefe/Supervisor desde "Mis OTs").
+    Los ítems que el mecánico ya había finalizado con `completar_item` NO
+    se tocan -- ese trabajo ya quedó hecho y registrado (fotos, eventos de
+    mantenimiento, Hoja de Vida). Los que seguían "pendiente" se marcan
+    "cancelada" y quedan libres para poder asociarse a una OT nueva --
+    `_referencias_asignadas` solo bloquea por ítems de una OT "enviada",
+    así que apenas esta OT deja de estarlo, Fallas y Mantenimiento
+    Programado vuelven a aparecer disponibles.
+    """
+    with engine.begin() as conn:
+        conn.execute(
+            ordenes_trabajo.update().where(ordenes_trabajo.c.id == ot_id)
+            .values(estado="cancelada", motivo_cancelacion=motivo or None)
+        )
+        conn.execute(
+            ot_items.update()
+            .where(ot_items.c.ot_id == ot_id)
+            .where(or_(ot_items.c.estado.is_(None), ot_items.c.estado != "completada"))
+            .values(estado="cancelada")
+        )

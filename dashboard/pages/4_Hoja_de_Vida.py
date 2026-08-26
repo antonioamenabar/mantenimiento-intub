@@ -20,7 +20,7 @@ from src.queries import opciones_patentes
 st.set_page_config(page_title="Hoja de Vida - Intub", layout="wide")
 
 engine = get_engine()
-usuario = auth.requerir_login(rol_requerido="jefe")
+usuario = auth.requerir_login(rol_requerido=auth.ROLES_GESTION)
 
 st.markdown("<h1 style='text-align:center;'>📖 Hoja de Vida</h1>", unsafe_allow_html=True)
 

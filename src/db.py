@@ -205,6 +205,7 @@ def _migrar_columnas_nuevas(engine):
         ("ordenes_trabajo", "notas_pendientes", "TEXT"),
         ("ot_items", "comentario", "TEXT"),
         ("inspeccion_checklist_respuestas", "valor", "VARCHAR(60)"),
+        ("ordenes_trabajo", "motivo_cancelacion", "TEXT"),
     ]
 
     def _nombre_completo(tabla):
@@ -378,7 +379,7 @@ usuarios = Table(
     Column("username", String(60), unique=True),
     Column("password_hash", String(160)),
     Column("nombre", String(120)),
-    Column("rol", String(20)),  # "jefe" | "mecanico"
+    Column("rol", String(20)),  # "jefe" | "supervisor" | "mecanico" | "admin"
     Column("activo", Boolean, default=True),
     Column("created_at", DateTime),
 )
@@ -423,6 +424,9 @@ ordenes_trabajo = Table(
     # Obligatorio (se valida en la UI) cuando la OT se cierra con ítems que
     # quedaron sin marcar "completada" -- por qué no se terminaron.
     Column("notas_pendientes", Text, nullable=True),
+    # Motivo (opcional) cuando el Jefe/Supervisor cancela la OT -- ver
+    # `ordenes_trabajo.cancelar_ot` en el módulo del mismo nombre.
+    Column("motivo_cancelacion", Text, nullable=True),
 )
 
 # Las tareas concretas dentro de una OT. Una misma OT puede traer ítems de
