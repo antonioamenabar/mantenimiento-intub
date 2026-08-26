@@ -281,16 +281,23 @@ def _texto_intervalo(intervalo_horas, intervalo_km, intervalo_meses, intervalo_d
     dos o más a la vez). `intervalo_dias` (reglas creadas a mano desde
     Programa de Mantención) manda sobre `intervalo_meses` si ambos existen.
     """
+    # `pd.notna` (no `if valor:` a secas) porque una columna de la base con
+    # NULL mezclado con números reales llega acá como NaN (float) vía
+    # pandas -- y `nan` es "verdadero" en un if, así que un `if valor:`
+    # simple mostraría "nan horas"/"nan días" en vez de omitirlo.
     partes = []
-    if intervalo_horas:
+    if pd.notna(intervalo_horas) and intervalo_horas:
         partes.append(f"{intervalo_horas:,.0f} horas".replace(",", "."))
-    if intervalo_km:
+    if pd.notna(intervalo_km) and intervalo_km:
         partes.append(f"{intervalo_km:,.0f} km".replace(",", "."))
-    if intervalo_dias:
+    if pd.notna(intervalo_dias) and intervalo_dias:
         partes.append(f"{intervalo_dias:,.0f} días calendario".replace(",", "."))
-    elif intervalo_meses:
-        unidad = "mes" if intervalo_meses == 1 else "meses"
-        partes.append(f"{intervalo_meses} {unidad} calendario")
+    elif pd.notna(intervalo_meses) and intervalo_meses:
+        # int(): la columna puede llegar en float (3.0) por la misma razón
+        # de arriba (mezcla con NULL en otras filas).
+        meses = int(intervalo_meses)
+        unidad = "mes" if meses == 1 else "meses"
+        partes.append(f"{meses} {unidad} calendario")
     if not partes:
         return "Sin dato"
     if len(partes) == 1:
@@ -301,11 +308,15 @@ def _texto_intervalo(intervalo_horas, intervalo_km, intervalo_meses, intervalo_d
 def _proxima_fecha_calendario(ultima_fecha, regla: dict):
     """`intervalo_dias` manda si está definido (más preciso, y es lo que
     usan las reglas creadas a mano); si no, se usa `intervalo_meses` (las
-    reglas de código). `None` si la regla no tiene ninguno de los dos."""
-    if regla.get("intervalo_dias"):
-        return ultima_fecha + timedelta(days=int(regla["intervalo_dias"]))
-    if regla.get("intervalo_meses"):
-        return _sumar_meses(ultima_fecha, int(regla["intervalo_meses"]))
+    reglas de código). `None` si la regla no tiene ninguno de los dos.
+    `pd.notna` -- ver nota en `_texto_intervalo` sobre NaN de pandas.
+    """
+    dias = regla.get("intervalo_dias")
+    if pd.notna(dias) and dias:
+        return ultima_fecha + timedelta(days=int(dias))
+    meses = regla.get("intervalo_meses")
+    if pd.notna(meses) and meses:
+        return _sumar_meses(ultima_fecha, int(meses))
     return None
 
 
@@ -382,6 +393,46 @@ def programa_mantenimiento(engine) -> pd.DataFrame:
     return pd.DataFrame(filas)
 
 
+def tabla_item_por_patente(engine, item_key: str) -> pd.DataFrame:
+    """Para UN componente, una fila por cada camión de la flota con la
+    regla que le aplica hoy -- la más específica primero: por camión >
+    por marca/modelo del componente instalado > genérica. Para la vista
+    "Camión x intervalo" de Programa de Mantención (a diferencia de
+    `programa_mantenimiento`, que agrupa por regla; esta agrupa por
+    camión, uno por fila, siempre).
+    """
+    flota_df = _load_flota(engine)
+    reglas_df = _cargar_reglas(engine)
+    reglas_patentes_df = _cargar_reglas_patentes(engine)
+    componentes_df = _cargar_componentes(engine)
+
+    filas = []
+    for _, camion in flota_df.iterrows():
+        patente = camion["patente"]
+        regla = _regla_patente_para(reglas_df, reglas_patentes_df, item_key, patente)
+        es_especifica = regla is not None
+        if regla is None:
+            comp = componentes_df[(componentes_df["item_key"] == item_key) & (componentes_df["patente"] == patente)]
+            marca = comp.iloc[0]["marca"] if not comp.empty else None
+            modelo = comp.iloc[0]["modelo"] if not comp.empty else None
+            regla = _regla_para(reglas_df, item_key, marca, modelo)
+        filas.append({
+            "patente": patente, "nombre_corto": camion["nombre_corto"],
+            "regla_id": int(regla["id"]) if regla is not None and es_especifica else None,
+            "intervalo_horas": regla.get("intervalo_horas") if regla else None,
+            "intervalo_dias": regla.get("intervalo_dias") if regla else None,
+            "intervalo_texto": (
+                _texto_intervalo(
+                    regla.get("intervalo_horas"), regla.get("intervalo_km"),
+                    regla.get("intervalo_meses"), regla.get("intervalo_dias"),
+                ) if regla is not None else "Sin dato"
+            ),
+            "confianza": regla.get("confianza", "sindato") if regla else "sindato",
+            "es_especifica": es_especifica,
+        })
+    return pd.DataFrame(filas)
+
+
 def guardar_regla_patentes(
     engine, item_key: str, patentes: list[str],
     intervalo_horas: int | None, intervalo_dias: int | None,
@@ -403,6 +454,19 @@ def guardar_regla_patentes(
 
 def eliminar_regla(engine, regla_id: int):
     eliminar_regla_mantencion(engine, regla_id)
+
+
+def actualizar_regla_patente(
+    engine, item_key: str, patente: str, regla_id_anterior: int | None,
+    intervalo_horas: int | None, intervalo_dias: int | None, creado_por: str = "",
+) -> int:
+    """Crea/reemplaza la regla específica de UN camión para un ítem, desde
+    la vista "por camión" de Programa de Mantención -- si ya tenía una
+    (`regla_id_anterior`), la borra primero. Devuelve el id de la nueva.
+    """
+    if regla_id_anterior is not None:
+        eliminar_regla(engine, regla_id_anterior)
+    return guardar_regla_patentes(engine, item_key, [patente], intervalo_horas, intervalo_dias, creado_por)
 
 
 # ---------------------------------------------------------------------------
@@ -524,8 +588,9 @@ def estado_vencimiento(ultima_fecha, ultimo_horometro, regla: dict | None, hoy=N
         estado = "ok"
 
     texto = proxima_fecha.strftime("%d-%m-%Y")
-    if regla.get("intervalo_horas") and ultimo_horometro is not None:
-        texto += f" · {ultimo_horometro}h+{regla['intervalo_horas']}h"
+    intervalo_horas = regla.get("intervalo_horas")
+    if pd.notna(intervalo_horas) and intervalo_horas and ultimo_horometro is not None:
+        texto += f" · {ultimo_horometro}h+{int(intervalo_horas)}h"
 
     return {
         "estado": estado, "confianza": confianza,
@@ -573,7 +638,11 @@ def matriz_mantenimiento(engine, patentes: list[str] | None = None, hoy=None) ->
             ultimo_horometro = None
             if evento is not None and evento["fecha"]:
                 ultima_fecha = datetime.strptime(evento["fecha"], "%Y-%m-%d").date()
-                ultimo_horometro = evento["horometro"]
+                # pd.isna, no NULL directo: la columna puede llegar en
+                # float64 con NaN si otra fila del mismo query sí tenía
+                # horómetro (ver nota en `_texto_intervalo`).
+                horometro_crudo = evento["horometro"]
+                ultimo_horometro = None if pd.isna(horometro_crudo) else int(horometro_crudo)
 
             fila[item_key] = estado_vencimiento(ultima_fecha, ultimo_horometro, regla, hoy)
         filas.append(fila)
