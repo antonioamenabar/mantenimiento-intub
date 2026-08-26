@@ -24,10 +24,10 @@ import pandas as pd
 from sqlalchemy import select
 
 from src.db import (
-    item_catalogo, reglas_mantencion, componentes_camion,
+    item_catalogo, reglas_mantencion, reglas_mantencion_patentes, componentes_camion,
     eventos_mantenimiento,
     upsert_item_catalogo, replace_reglas_mantencion, upsert_componentes_camion,
-    insertar_eventos_mantenimiento,
+    insertar_eventos_mantenimiento, crear_regla_patentes, eliminar_regla_mantencion,
 )
 from src.queries import _load_flota
 
@@ -107,7 +107,7 @@ def seed_catalogo_y_reglas(engine):
         {
             "item_key": item_key, "marca": marca, "modelo": modelo,
             "intervalo_meses": meses, "intervalo_horas": horas, "intervalo_km": km,
-            "confianza": confianza, "fuente": fuente,
+            "confianza": confianza, "fuente": fuente, "origen": "codigo",
         }
         for item_key, marca, modelo, meses, horas, km, confianza, fuente in REGLAS
     ])
@@ -205,8 +205,16 @@ def _cargar_reglas(engine) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=[
             "id", "item_key", "marca", "modelo", "intervalo_meses",
-            "intervalo_horas", "intervalo_km", "confianza", "fuente",
+            "intervalo_horas", "intervalo_km", "intervalo_dias", "confianza", "fuente", "origen",
         ])
+    return df
+
+
+def _cargar_reglas_patentes(engine) -> pd.DataFrame:
+    with engine.connect() as conn:
+        df = pd.read_sql(select(reglas_mantencion_patentes), conn)
+    if df.empty:
+        return pd.DataFrame(columns=["regla_id", "patente"])
     return df
 
 
@@ -252,16 +260,35 @@ def _regla_para(reglas_df: pd.DataFrame, item_key: str, marca, modelo) -> dict |
     return None
 
 
-def _texto_intervalo(intervalo_horas, intervalo_km, intervalo_meses) -> str:
+def _regla_patente_para(reglas_df: pd.DataFrame, reglas_patentes_df: pd.DataFrame, item_key: str, patente: str) -> dict | None:
+    """Regla creada a mano para ESTE camión en particular (ver
+    `crear_regla_patentes`) -- manda por sobre la regla genérica/por marca
+    de `_regla_para`. Si hay más de una (no debería pasar seguido), se usa
+    la más reciente.
+    """
+    ids_de_patente = reglas_patentes_df.loc[reglas_patentes_df["patente"] == patente, "regla_id"]
+    if ids_de_patente.empty:
+        return None
+    candidatas = reglas_df[(reglas_df["item_key"] == item_key) & (reglas_df["id"].isin(ids_de_patente))]
+    if candidatas.empty:
+        return None
+    return candidatas.sort_values("id").iloc[-1].to_dict()
+
+
+def _texto_intervalo(intervalo_horas, intervalo_km, intervalo_meses, intervalo_dias=None) -> str:
     """Texto tipo "500 horas o 3 meses calendario, lo que ocurra primero"
     -- combina las unidades que la regla tenga definidas (puede tener una,
-    dos o las tres a la vez)."""
+    dos o más a la vez). `intervalo_dias` (reglas creadas a mano desde
+    Programa de Mantención) manda sobre `intervalo_meses` si ambos existen.
+    """
     partes = []
     if intervalo_horas:
         partes.append(f"{intervalo_horas:,.0f} horas".replace(",", "."))
     if intervalo_km:
         partes.append(f"{intervalo_km:,.0f} km".replace(",", "."))
-    if intervalo_meses:
+    if intervalo_dias:
+        partes.append(f"{intervalo_dias:,.0f} días calendario".replace(",", "."))
+    elif intervalo_meses:
         unidad = "mes" if intervalo_meses == 1 else "meses"
         partes.append(f"{intervalo_meses} {unidad} calendario")
     if not partes:
@@ -271,27 +298,65 @@ def _texto_intervalo(intervalo_horas, intervalo_km, intervalo_meses) -> str:
     return " o ".join(partes) + ", lo que ocurra primero"
 
 
+def _proxima_fecha_calendario(ultima_fecha, regla: dict):
+    """`intervalo_dias` manda si está definido (más preciso, y es lo que
+    usan las reglas creadas a mano); si no, se usa `intervalo_meses` (las
+    reglas de código). `None` si la regla no tiene ninguno de los dos."""
+    if regla.get("intervalo_dias"):
+        return ultima_fecha + timedelta(days=int(regla["intervalo_dias"]))
+    if regla.get("intervalo_meses"):
+        return _sumar_meses(ultima_fecha, int(regla["intervalo_meses"]))
+    return None
+
+
 def programa_mantenimiento(engine) -> pd.DataFrame:
     """El Programa de Mantenimiento completo: para cada componente, cada
-    regla conocida (la genérica y, si las hay, las específicas por marca/
-    modelo) con su intervalo en texto y qué camiones de la flota tienen
-    ese componente específico instalado -- para mostrar en una pantalla de
-    referencia, no para calcular vencimientos (eso lo hace
+    regla conocida -- la genérica/por marca (de código, solo lectura) y
+    las que el Supervisor/Admin haya creado a mano para camiones puntuales
+    (editables, ver `guardar_regla_patentes`) -- con su intervalo en texto
+    y qué camiones aplica. No calcula vencimientos (eso lo hace
     `matriz_mantenimiento`).
     """
     items_df = catalogo_items(engine)
     reglas_df = _cargar_reglas(engine)
+    reglas_patentes_df = _cargar_reglas_patentes(engine)
     componentes_df = _cargar_componentes(engine)
+
+    patentes_por_regla = (
+        reglas_patentes_df.groupby("regla_id")["patente"].apply(lambda s: sorted(s))
+        if not reglas_patentes_df.empty else {}
+    )
+    ids_con_patentes = set(reglas_patentes_df["regla_id"]) if not reglas_patentes_df.empty else set()
 
     filas = []
     for _, item in items_df.iterrows():
         reglas_item = reglas_df[reglas_df["item_key"] == item["item_key"]]
-        # La genérica (marca NULL) primero, después las específicas.
-        reglas_item = pd.concat([
-            reglas_item[reglas_item["marca"].isna()],
-            reglas_item[reglas_item["marca"].notna()].sort_values(["marca", "modelo"]),
+
+        # Reglas "por camión" (creadas a mano) -- las que tienen patentes
+        # ligadas en `reglas_mantencion_patentes`, sin importar su marca.
+        especificas = reglas_item[reglas_item["id"].isin(ids_con_patentes)]
+        for _, regla in especificas.iterrows():
+            patentes_regla = patentes_por_regla.get(regla["id"], [])
+            filas.append({
+                "categoria": item["categoria"], "nombre": item["nombre"], "orden": item["orden"],
+                "item_key": item["item_key"], "regla_id": int(regla["id"]),
+                "marca_modelo": None, "es_generica": False, "es_por_camion": True,
+                "intervalo_horas": regla["intervalo_horas"], "intervalo_km": regla["intervalo_km"],
+                "intervalo_meses": regla["intervalo_meses"], "intervalo_dias": regla["intervalo_dias"],
+                "intervalo_texto": _texto_intervalo(
+                    regla["intervalo_horas"], regla["intervalo_km"], regla["intervalo_meses"], regla["intervalo_dias"],
+                ),
+                "confianza": regla["confianza"], "fuente": regla["fuente"],
+                "camiones": patentes_regla,
+            })
+
+        # Reglas genéricas/por marca (de código) -- la genérica primero.
+        generales = reglas_item[~reglas_item["id"].isin(ids_con_patentes)]
+        generales = pd.concat([
+            generales[generales["marca"].isna()],
+            generales[generales["marca"].notna()].sort_values(["marca", "modelo"]),
         ])
-        for _, regla in reglas_item.iterrows():
+        for _, regla in generales.iterrows():
             es_generica = pd.isna(regla["marca"])
             if es_generica:
                 marca_modelo = "Genérico (sin marca conocida)"
@@ -304,14 +369,40 @@ def programa_mantenimiento(engine) -> pd.DataFrame:
                 camiones = sorted(componentes_df.loc[filtro, "patente"].tolist())
             filas.append({
                 "categoria": item["categoria"], "nombre": item["nombre"], "orden": item["orden"],
-                "marca_modelo": marca_modelo, "es_generica": es_generica,
+                "item_key": item["item_key"], "regla_id": int(regla["id"]),
+                "marca_modelo": marca_modelo, "es_generica": es_generica, "es_por_camion": False,
                 "intervalo_horas": regla["intervalo_horas"], "intervalo_km": regla["intervalo_km"],
-                "intervalo_meses": regla["intervalo_meses"],
-                "intervalo_texto": _texto_intervalo(regla["intervalo_horas"], regla["intervalo_km"], regla["intervalo_meses"]),
+                "intervalo_meses": regla["intervalo_meses"], "intervalo_dias": regla["intervalo_dias"],
+                "intervalo_texto": _texto_intervalo(
+                    regla["intervalo_horas"], regla["intervalo_km"], regla["intervalo_meses"], regla["intervalo_dias"],
+                ),
                 "confianza": regla["confianza"], "fuente": regla["fuente"],
                 "camiones": camiones,
             })
     return pd.DataFrame(filas)
+
+
+def guardar_regla_patentes(
+    engine, item_key: str, patentes: list[str],
+    intervalo_horas: int | None, intervalo_dias: int | None,
+    creado_por: str = "",
+) -> int:
+    """Crea una regla "por camión" desde Programa de Mantención -- el
+    Supervisor/Admin elige directamente a qué patentes aplica, sin pasar
+    por marca/modelo. Devuelve el id de la regla creada.
+    """
+    regla = {
+        "item_key": item_key, "marca": None, "modelo": None,
+        "intervalo_meses": None, "intervalo_horas": intervalo_horas or None,
+        "intervalo_km": None, "intervalo_dias": intervalo_dias or None,
+        "confianza": "confirmado",
+        "fuente": f"Definido por {creado_por} desde Programa de Mantención" if creado_por else "Definido desde Programa de Mantención",
+    }
+    return crear_regla_patentes(engine, regla, patentes)
+
+
+def eliminar_regla(engine, regla_id: int):
+    eliminar_regla_mantencion(engine, regla_id)
 
 
 # ---------------------------------------------------------------------------
@@ -411,14 +502,14 @@ def estado_vencimiento(ultima_fecha, ultimo_horometro, regla: dict | None, hoy=N
             "texto": "Nunca registrado",
         }
 
-    if regla is None or regla.get("intervalo_meses") is None:
+    proxima_fecha = _proxima_fecha_calendario(ultima_fecha, regla) if regla else None
+    if proxima_fecha is None:
         return {
             "estado": "sin_regla", "confianza": confianza,
             "proxima_fecha": None, "dias_restantes": None, "horas_restantes": None,
             "texto": f"Última: {ultima_fecha.strftime('%d-%m-%Y')}",
         }
 
-    proxima_fecha = _sumar_meses(ultima_fecha, regla["intervalo_meses"])
     dias_restantes = (proxima_fecha - hoy).days
     # Horas "de calendario" hasta el vencimiento (dias_restantes * 24) -- no
     # son horas de uso del equipo (no tenemos horómetro en vivo), pero dan
@@ -451,6 +542,7 @@ def matriz_mantenimiento(engine, patentes: list[str] | None = None, hoy=None) ->
     flota_df = _load_flota(engine, patentes)
     items_df = catalogo_items(engine)
     reglas_df = _cargar_reglas(engine)
+    reglas_patentes_df = _cargar_reglas_patentes(engine)
     componentes_df = _cargar_componentes(engine, patentes)
     ultimos_df = _ultimos_eventos(engine, patentes)
     hoy = hoy or datetime.now().date()
@@ -467,10 +559,14 @@ def matriz_mantenimiento(engine, patentes: list[str] | None = None, hoy=None) ->
         fila = {"patente": camion["patente"], "nombre_corto": camion["nombre_corto"]}
         for _, item in items_df.iterrows():
             item_key = item["item_key"]
-            comp = componentes_por_patente_item.get((camion["patente"], item_key))
-            marca = comp["marca"] if comp is not None else None
-            modelo = comp["modelo"] if comp is not None else None
-            regla = _regla_para(reglas_df, item_key, marca, modelo)
+            # Una regla creada a mano para este camión puntual manda por
+            # sobre la que le tocaría por marca/modelo (o la genérica).
+            regla = _regla_patente_para(reglas_df, reglas_patentes_df, item_key, camion["patente"])
+            if regla is None:
+                comp = componentes_por_patente_item.get((camion["patente"], item_key))
+                marca = comp["marca"] if comp is not None else None
+                modelo = comp["modelo"] if comp is not None else None
+                regla = _regla_para(reglas_df, item_key, marca, modelo)
 
             evento = ultimo_por_patente_item.get((camion["patente"], item_key))
             ultima_fecha = None

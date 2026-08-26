@@ -135,8 +135,30 @@ reglas_mantencion = Table(
     # horómetro, no por odómetro. Queda listo por si algún camión empieza
     # a registrarse por kilometraje.
     Column("intervalo_km", Integer, nullable=True),
+    # Alternativa a `intervalo_meses` con más precisión -- las reglas que
+    # el Supervisor/Admin define a mano desde Programa de Mantención usan
+    # días, no meses. Si una regla tiene `intervalo_dias`, manda sobre
+    # `intervalo_meses` (ver `planificacion._proxima_fecha_calendario`).
+    Column("intervalo_dias", Integer, nullable=True),
     Column("confianza", String(12)),  # confirmado | estimado | sindato
     Column("fuente", Text),
+    # "codigo" (las reglas de fábrica, en `planificacion.REGLAS`) |
+    # "usuario" (creada a mano desde Programa de Mantención). El reseed de
+    # arranque (`replace_reglas_mantencion`) solo toca las de "codigo" --
+    # así una regla creada a mano no se borra sola en el próximo reinicio.
+    Column("origen", String(10), nullable=True),
+)
+
+# A qué camiones aplica una regla creada a mano desde Programa de
+# Mantención (en vez de por marca/modelo) -- el Supervisor/Admin elige
+# directamente las patentes. Si un (patente, item_key) tiene una regla
+# así, manda por sobre la regla genérica/por marca (ver
+# `planificacion._regla_patente_para`).
+reglas_mantencion_patentes = Table(
+    "reglas_mantencion_patentes",
+    metadata,
+    Column("regla_id", Integer, primary_key=True),
+    Column("patente", String(20), primary_key=True),
 )
 
 # Qué componente físico (marca/modelo/n° de serie) tiene instalado cada
@@ -211,6 +233,8 @@ def _migrar_columnas_nuevas(engine):
         ("inspeccion_checklist_respuestas", "valor", "VARCHAR(60)"),
         ("ordenes_trabajo", "motivo_cancelacion", "TEXT"),
         ("reglas_mantencion", "intervalo_km", "INTEGER"),
+        ("reglas_mantencion", "intervalo_dias", "INTEGER"),
+        ("reglas_mantencion", "origen", "VARCHAR(10)"),
     ]
 
     def _nombre_completo(tabla):
@@ -244,6 +268,15 @@ def _migrar_columnas_nuevas(engine):
                 f"AND ot_id IN (SELECT id FROM {ot} WHERE estado = 'completada')"
             ))
             conn.execute(text(f"UPDATE {oi} SET estado = 'pendiente' WHERE estado IS NULL"))
+
+    # Backfill: todas las reglas que ya existían antes de que `origen`
+    # existiera son "de código" (`replace_reglas_mantencion` las borraba
+    # todas sin distinción hasta ahora) -- las marca así una sola vez.
+    if "reglas_mantencion" in tablas_existentes:
+        with engine.begin() as conn:
+            conn.execute(text(
+                f"UPDATE {_nombre_completo('reglas_mantencion')} SET origen = 'codigo' WHERE origen IS NULL"
+            ))
 
     # Backfill: OTs viejas, de un solo mecánico en `asignado_id` -- se
     # copian a la tabla puente `ot_asignados` (una fila), para que de acá
@@ -345,16 +378,38 @@ def upsert_item_catalogo(engine, items: list[dict]):
 
 
 def replace_reglas_mantencion(engine, reglas: list[dict]):
-    """Reemplaza por completo las reglas de mantención (borra todo y vuelve a
-    insertar). Se usa reemplazo -- igual que con los tickets -- porque las
-    reglas viven como constantes en `src/planificacion.py` y se reconstruyen
-    completas cada vez que se corre el seed; no tiene sentido ir acumulando
-    filas viejas si una regla cambió de intervalo.
+    """Reemplaza las reglas "de código" (borra esas y vuelve a insertar) --
+    igual que con los tickets, porque viven como constantes en
+    `src/planificacion.py` y se reconstruyen completas cada vez que corre
+    el seed. Las reglas "de usuario" (creadas a mano desde Programa de
+    Mantención) NO se tocan -- si no, un reinicio del servidor las borraría.
     """
     with engine.begin() as conn:
-        conn.execute(reglas_mantencion.delete())
+        conn.execute(reglas_mantencion.delete().where(reglas_mantencion.c.origen == "codigo"))
         if reglas:
             conn.execute(reglas_mantencion.insert(), reglas)
+
+
+def crear_regla_patentes(engine, regla: dict, patentes: list[str]) -> int:
+    """Crea una regla "de usuario" (ver `replace_reglas_mantencion`) y la
+    liga directamente a los camiones elegidos -- sin pasar por marca/
+    modelo. Devuelve el id de la regla creada.
+    """
+    with engine.begin() as conn:
+        result = conn.execute(reglas_mantencion.insert().values(**regla, origen="usuario"))
+        regla_id = result.inserted_primary_key[0]
+        if patentes:
+            conn.execute(
+                reglas_mantencion_patentes.insert(),
+                [{"regla_id": regla_id, "patente": p} for p in dict.fromkeys(patentes)],
+            )
+        return regla_id
+
+
+def eliminar_regla_mantencion(engine, regla_id: int):
+    with engine.begin() as conn:
+        conn.execute(reglas_mantencion_patentes.delete().where(reglas_mantencion_patentes.c.regla_id == regla_id))
+        conn.execute(reglas_mantencion.delete().where(reglas_mantencion.c.id == regla_id))
 
 
 def upsert_componentes_camion(engine, componentes: list[dict]):
