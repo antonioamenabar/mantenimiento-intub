@@ -28,6 +28,7 @@ from src.db import (
     eventos_mantenimiento,
     upsert_item_catalogo, replace_reglas_mantencion, upsert_componentes_camion,
     insertar_eventos_mantenimiento, crear_regla_patentes, eliminar_regla_mantencion,
+    quitar_patente_de_regla,
 )
 from src.queries import _load_flota
 
@@ -462,11 +463,28 @@ def actualizar_regla_patente(
 ) -> int:
     """Crea/reemplaza la regla específica de UN camión para un ítem, desde
     la vista "por camión" de Programa de Mantención -- si ya tenía una
-    (`regla_id_anterior`), la borra primero. Devuelve el id de la nueva.
+    (`regla_id_anterior`), la desvincula primero (no la borra entera: esa
+    regla puede seguir aplicando a otros camiones si se creó en un lote --
+    ver `actualizar_regla_patentes_masivo`). Devuelve el id de la nueva.
     """
     if regla_id_anterior is not None:
-        eliminar_regla(engine, regla_id_anterior)
+        quitar_patente_de_regla(engine, regla_id_anterior, patente)
     return guardar_regla_patentes(engine, item_key, [patente], intervalo_horas, intervalo_dias, creado_por)
+
+
+def actualizar_regla_patentes_masivo(
+    engine, item_key: str, patentes: list[str],
+    intervalo_horas: int | None, intervalo_dias: int | None, creado_por: str = "",
+) -> int:
+    """Igual que `actualizar_regla_patente`, pero para varios camiones a
+    la vez -- para ítems como "Aceite motor" donde toda la flota comparte
+    el mismo intervalo, sin tener que repetirlo camión por camión.
+    """
+    tabla_actual = tabla_item_por_patente(engine, item_key)
+    especificas = tabla_actual[tabla_actual["patente"].isin(patentes) & tabla_actual["es_especifica"]]
+    for _, fila in especificas.iterrows():
+        quitar_patente_de_regla(engine, int(fila["regla_id"]), fila["patente"])
+    return guardar_regla_patentes(engine, item_key, patentes, intervalo_horas, intervalo_dias, creado_por)
 
 
 # ---------------------------------------------------------------------------

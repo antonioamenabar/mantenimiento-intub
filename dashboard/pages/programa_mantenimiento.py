@@ -66,6 +66,46 @@ for categoria in ("camion", "equipo"):
             with st.expander(item["nombre"], expanded=False, key=_key_item(item_key)):
                 tabla = planificacion.tabla_item_por_patente(engine, item_key)
 
+                with st.popover("✏️ Editar varios camiones a la vez", key=f"prog_masivo_{item_key}"):
+                    st.caption(
+                        f"Aplica la misma regla a los camiones que elijas -- {item['nombre']}. "
+                        "Útil cuando toda la flota (o varios) comparte el mismo intervalo."
+                    )
+                    etiqueta_patente = dict(zip(
+                        tabla["patente"],
+                        tabla["nombre_corto"] + " (" + tabla["patente"] + ") -- " + tabla["intervalo_texto"],
+                    ))
+                    patentes_masivo = st.multiselect(
+                        "Camiones", options=tabla["patente"].tolist(),
+                        format_func=lambda p: etiqueta_patente.get(p, p),
+                        key=f"prog_masivo_patentes_{item_key}",
+                    )
+                    col_h_masivo, col_d_masivo = st.columns(2)
+                    with col_h_masivo:
+                        horas_masivo = st.number_input(
+                            "Horas", min_value=0, step=10, value=0, key=f"prog_masivo_horas_{item_key}",
+                        )
+                    with col_d_masivo:
+                        dias_masivo = st.number_input(
+                            "Días calendario", min_value=0, step=10, value=0, key=f"prog_masivo_dias_{item_key}",
+                        )
+                    if st.button(
+                        "Aplicar a los seleccionados", type="primary",
+                        key=f"prog_masivo_guardar_{item_key}", width="stretch",
+                    ):
+                        if not patentes_masivo:
+                            st.warning("Elige al menos un camión.")
+                        elif not horas_masivo and not dias_masivo:
+                            st.warning("Define horas y/o días calendario -- al menos uno.")
+                        else:
+                            planificacion.actualizar_regla_patentes_masivo(
+                                engine, item_key=item_key, patentes=patentes_masivo,
+                                intervalo_horas=int(horas_masivo) or None, intervalo_dias=int(dias_masivo) or None,
+                                creado_por=usuario["nombre"],
+                            )
+                            flash("success", f"Regla aplicada a {len(patentes_masivo)} camión(es).")
+                            st.rerun()
+
                 for _, fila in tabla.iterrows():
                     badge = planificacion.CONFIANZA_BADGE.get(fila["confianza"], "🔴")
                     marca_especifica = " 🔧" if fila["es_especifica"] else ""
@@ -114,7 +154,7 @@ for categoria in ("camion", "equipo"):
                                     "↩️ Quitar (volver a la regla general)",
                                     key=f"prog_quitar_{item_key}_{fila['patente']}", width="stretch",
                                 ):
-                                    planificacion.eliminar_regla(engine, int(fila["regla_id"]))
+                                    planificacion.quitar_patente_de_regla(engine, int(fila["regla_id"]), fila["patente"])
                                     flash("success", f"{fila['nombre_corto']} vuelve a la regla general.")
                                     st.rerun()
 

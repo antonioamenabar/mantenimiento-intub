@@ -412,6 +412,30 @@ def eliminar_regla_mantencion(engine, regla_id: int):
         conn.execute(reglas_mantencion.delete().where(reglas_mantencion.c.id == regla_id))
 
 
+def quitar_patente_de_regla(engine, regla_id: int, patente: str):
+    """Quita a UN camión de una regla "de usuario" -- para cuando se edita
+    ese camión aparte (individual o en otro lote) y la regla vieja seguía
+    aplicando a otros camiones que no se tocaron. Si al sacarlo la regla
+    queda sin ningún camión ligado, se borra entera (no tiene sentido una
+    regla que ya no aplica a nadie).
+    """
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        conn.execute(
+            reglas_mantencion_patentes.delete()
+            .where(reglas_mantencion_patentes.c.regla_id == regla_id)
+            .where(reglas_mantencion_patentes.c.patente == patente)
+        )
+        quedan = conn.execute(
+            text("SELECT count(*) FROM " + (
+                f"{config.DB_SCHEMA}.reglas_mantencion_patentes" if config.DB_SCHEMA else "reglas_mantencion_patentes"
+            ) + " WHERE regla_id = :regla_id"),
+            {"regla_id": regla_id},
+        ).scalar()
+        if quedan == 0:
+            conn.execute(reglas_mantencion.delete().where(reglas_mantencion.c.id == regla_id))
+
+
 def upsert_componentes_camion(engine, componentes: list[dict]):
     """Inserta o actualiza qué componente físico (marca/modelo/n° serie)
     tiene instalado cada camión. Idempotente por (patente, item_key).
