@@ -45,7 +45,20 @@ if items_df.empty:
 # adentro, la página haría ~4 consultas x 14 ítems = 56 viajes a la base
 # en cada carga. `todos_items_por_patente` carga las tablas base una vez
 # y arma cada tabla en memoria.
-tablas_por_item = planificacion.todos_items_por_patente(engine)
+# Además queda en caché (`st.cache_data`): CUALQUIER clic en esta página
+# (abrir un desplegable, "Comprimir todo", etc.) hace que Streamlit
+# rehaga todo el script -- sin caché, volvería a pedir la base entera
+# incluso para algo tan simple como cerrar un acordeón. `_engine` con
+# guion bajo: así Streamlit no intenta "hashearlo" para la clave de
+# caché (no se puede, ni tiene sentido -- es la misma conexión siempre).
+# Se limpia a mano (`.clear()`) apenas se guarda/quita una regla, para
+# que el cambio se vea de inmediato sin esperar los 60 segundos del TTL.
+@st.cache_data(ttl=60, show_spinner=False)
+def _cargar_tablas_por_item(_engine):
+    return planificacion.todos_items_por_patente(_engine)
+
+
+tablas_por_item = _cargar_tablas_por_item(engine)
 
 # "Comprimir todo": en vez de sobrescribir el estado de cada `st.expander`
 # uno por uno (con `key` fijo, no siempre sincroniza al toque), se cambia
@@ -116,6 +129,7 @@ for categoria in ("camion", "equipo"):
                                 intervalo_horas=int(horas_masivo) or None, intervalo_dias=int(dias_masivo) or None,
                                 creado_por=usuario["nombre"],
                             )
+                            _cargar_tablas_por_item.clear()
                             flash("success", f"Regla aplicada a {len(patentes_masivo)} camión(es).")
                             st.rerun()
 
@@ -160,6 +174,7 @@ for categoria in ("camion", "equipo"):
                                         intervalo_horas=int(horas_edit) or None, intervalo_dias=int(dias_edit) or None,
                                         creado_por=usuario["nombre"],
                                     )
+                                    _cargar_tablas_por_item.clear()
                                     flash("success", f"Regla de {fila['nombre_corto']} actualizada.")
                                     st.rerun()
                             if fila["es_especifica"]:
@@ -168,6 +183,7 @@ for categoria in ("camion", "equipo"):
                                     key=f"prog_quitar_{item_key}_{fila['patente']}", width="stretch",
                                 ):
                                     planificacion.quitar_patente_de_regla(engine, int(fila["regla_id"]), fila["patente"])
+                                    _cargar_tablas_por_item.clear()
                                     flash("success", f"{fila['nombre_corto']} vuelve a la regla general.")
                                     st.rerun()
 

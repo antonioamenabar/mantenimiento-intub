@@ -183,7 +183,14 @@ else:
                     hide_index=True, width="content",
                     on_select="rerun", selection_mode="multi-row", key=f"ot_fallas_tabla_{patente_falla_sel}",
                 )
+                # `fallas_disp` puede achicarse de una corrida a la otra (ej.
+                # apenas se agrega una falla al carrito, esa fila deja de
+                # estar "disponible") sin que cambie la `key` del widget --
+                # la selección guardada puede quedar apuntando a una fila que
+                # ya no existe. Se descartan los índices que quedaron fuera
+                # de rango en vez de dejar reventar `.iloc`.
                 filas_sel = seleccion_fallas["selection"]["rows"] if seleccion_fallas else []
+                filas_sel = [i for i in filas_sel if i < len(fallas_disp)]
                 fallas_sel_df = fallas_disp.iloc[filas_sel]
                 if st.button("➕ Agregar seleccionadas al carrito", key="ot_falla_agregar"):
                     if fallas_sel_df.empty:
@@ -255,7 +262,11 @@ else:
                 hide_index=True, width="content",
                 on_select="rerun", selection_mode="multi-row", key=f"ot_mant_tabla_{patente_mant_sel}",
             )
+            # Mismo motivo que en Fallas: `items_disp` puede achicarse sin
+            # que cambie la `key` del widget -- se descartan índices fuera
+            # de rango en vez de dejar reventar `.iloc`.
             filas_sel_mant = seleccion_mant["selection"]["rows"] if seleccion_mant else []
+            filas_sel_mant = [i for i in filas_sel_mant if i < len(items_disp)]
             items_mant_sel_df = items_disp.iloc[filas_sel_mant]
             if st.button("➕ Agregar seleccionados al carrito", key="ot_mant_agregar"):
                 if items_mant_sel_df.empty:
