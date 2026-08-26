@@ -53,10 +53,11 @@ pendientes = tabla[tabla["estado"] == "enviada"]
 completadas = tabla[tabla["estado"] == "completada"]
 
 
-def _render_checklist_inspeccion(ot_item_id: int, subtipo: str) -> list[dict]:
+def _render_checklist_inspeccion(ot_item_id: int, subtipo: str) -> tuple[list[dict], str]:
     """El checklist completo de la ficha de `subtipo`, en vertical (foto,
     luego estado, luego observación si corresponde) -- pensado para
     completarse con el dedo en un celular, no lado a lado en columnas.
+    Devuelve (respuestas, comentario general de toda la ficha).
     """
     catalogo = chk.catalogo_para_subtipo(engine, subtipo)
     respuestas = []
@@ -68,9 +69,15 @@ def _render_checklist_inspeccion(ot_item_id: int, subtipo: str) -> list[dict]:
         prefijo = f"chk_{ot_item_id}_{fila_cat['id']}"
         with st.container(border=True):
             st.markdown(f"**{fila_cat['item']}**")
-            archivo = st.file_uploader(
-                "📷 Foto", type=["jpg", "jpeg", "png"], key=f"{prefijo}_foto",
+            archivos = st.file_uploader(
+                "📷 Foto(s)", type=["jpg", "jpeg", "png"], key=f"{prefijo}_foto",
+                accept_multiple_files=True,
             )
+            valor = None
+            if fila_cat["item"] in chk.ITEMS_CON_VALOR:
+                valor = st.text_input(
+                    f"Lectura de {fila_cat['item'].lower()}", key=f"{prefijo}_valor",
+                )
             estado = st.radio(
                 "Estado", options=chk.ESTADOS_CHECKLIST, format_func=lambda e: chk.ESTADO_LABEL[e],
                 key=f"{prefijo}_estado",
@@ -86,9 +93,10 @@ def _render_checklist_inspeccion(ot_item_id: int, subtipo: str) -> list[dict]:
                 )
         respuestas.append({
             "catalogo_id": int(fila_cat["id"]), "item": fila_cat["item"], "estado": estado,
-            "observacion": observacion, "archivo": archivo,
+            "observacion": observacion, "valor": valor, "archivos": archivos,
         })
-    return respuestas
+    comentario = st.text_area("Comentario (opcional)", key=f"chk_{ot_item_id}_comentario")
+    return respuestas, comentario
 
 
 def _render_falla(ot_item_id: int) -> dict:
@@ -96,7 +104,11 @@ def _render_falla(ot_item_id: int) -> dict:
     sistema = st.selectbox("Sistema trabajado", options=chk.SISTEMAS_FALLA, key=f"{prefijo}_sistema")
     foto_antes = st.file_uploader("📷 Foto antes", type=["jpg", "jpeg", "png"], key=f"{prefijo}_antes")
     foto_despues = st.file_uploader("📷 Foto después", type=["jpg", "jpeg", "png"], key=f"{prefijo}_despues")
-    return {"sistema": sistema, "foto_antes": foto_antes, "foto_despues": foto_despues, "horometro": None}
+    comentario = st.text_area("Comentario (opcional)", key=f"{prefijo}_comentario")
+    return {
+        "sistema": sistema, "foto_antes": foto_antes, "foto_despues": foto_despues,
+        "horometro": None, "comentario": comentario,
+    }
 
 
 def _render_mantenimiento(ot_item_id: int) -> dict:
@@ -106,13 +118,17 @@ def _render_mantenimiento(ot_item_id: int) -> dict:
     horometro = None
     if st.checkbox("¿Se leyó horómetro?", key=f"{prefijo}_tiene_horas"):
         horometro = st.number_input("Horas", min_value=0, step=1, key=f"{prefijo}_horas")
-    return {"sistema": None, "foto_antes": foto_antes, "foto_despues": foto_despues, "horometro": horometro}
+    comentario = st.text_area("Comentario (opcional)", key=f"{prefijo}_comentario")
+    return {
+        "sistema": None, "foto_antes": foto_antes, "foto_despues": foto_despues,
+        "horometro": horometro, "comentario": comentario,
+    }
 
 
 def _errores_checklist(respuestas: list[dict]) -> list[str]:
     errores = []
     for r in respuestas:
-        if r["archivo"] is None:
+        if not r["archivos"]:
             errores.append(f"Falta foto en «{r['item']}».")
         if r["estado"] in chk.ESTADOS_CON_OBSERVACION_OBLIGATORIA and not (r["observacion"] or "").strip():
             errores.append(f"«{r['item']}» quedó {chk.ESTADO_LABEL[r['estado']]} -- falta la observación.")
@@ -145,14 +161,17 @@ else:
             for _, it in items_pendientes[items_pendientes["tipo_item"] == "inspeccion"].iterrows():
                 nombre_camion = nombre_por_patente.get(it["patente"], it["patente"])
                 with st.expander(f"🔍 {it['referencia']} — {nombre_camion} ({it['patente']})", expanded=False):
-                    respuestas = _render_checklist_inspeccion(it["id"], it["referencia"])
+                    respuestas, comentario_insp = _render_checklist_inspeccion(it["id"], it["referencia"])
                     if st.button("✅ Finalizar tarea", key=f"fin_{it['id']}", width="stretch"):
                         errores = _errores_checklist(respuestas)
                         if errores:
                             st.warning("No se pudo guardar:\n\n" + "\n\n".join(f"- {e}" for e in errores))
                         else:
                             chk.guardar_checklist_completo(engine, fila["id"], int(it["id"]), respuestas)
-                            ot.completar_item(engine, ot_item_id=int(it["id"]), completado_por=usuario["nombre"])
+                            ot.completar_item(
+                                engine, ot_item_id=int(it["id"]), completado_por=usuario["nombre"],
+                                comentario=comentario_insp,
+                            )
                             flash("success", f"«{it['referencia']} — {nombre_camion}» finalizada.")
                             st.rerun()
 
@@ -165,7 +184,10 @@ else:
                             engine, fila["id"], int(it["id"]),
                             datos["sistema"], datos["foto_antes"], datos["foto_despues"],
                         )
-                        ot.completar_item(engine, ot_item_id=int(it["id"]), completado_por=usuario["nombre"])
+                        ot.completar_item(
+                            engine, ot_item_id=int(it["id"]), completado_por=usuario["nombre"],
+                            comentario=datos["comentario"],
+                        )
                         flash("success", f"«{it['descripcion'] or it['referencia']} — {nombre_camion}» finalizada.")
                         st.rerun()
 
@@ -180,7 +202,8 @@ else:
                         )
                         horometro = int(datos["horometro"]) if datos["horometro"] is not None else None
                         ot.completar_item(
-                            engine, ot_item_id=int(it["id"]), completado_por=usuario["nombre"], horometro=horometro,
+                            engine, ot_item_id=int(it["id"]), completado_por=usuario["nombre"],
+                            horometro=horometro, comentario=datos["comentario"],
                         )
                         flash("success", f"«{it['descripcion'] or it['referencia']} — {nombre_camion}» finalizada.")
                         st.rerun()
@@ -218,10 +241,10 @@ with st.expander(f"Historial de completadas ({len(completadas)})"):
         completadas_mostrar["notas_pendientes"] = completadas_mostrar["notas_pendientes"].fillna("—")
         st.dataframe(
             completadas_mostrar[[
-                "numero_ot", "patentes", "tipo_trabajo", "completado_at", "completado_por",
+                "numero_ot", "patentes", "asignados_nombres", "tipo_trabajo", "completado_at", "completado_por",
                 "notas_cierre", "notas_pendientes",
             ]].rename(columns={
-                "numero_ot": "OT", "patentes": "Camiones", "tipo_trabajo": "Tipo",
+                "numero_ot": "OT", "patentes": "Camiones", "asignados_nombres": "Asignado a", "tipo_trabajo": "Tipo",
                 "completado_at": "Completada", "completado_por": "Por", "notas_cierre": "Notas",
                 "notas_pendientes": "Tareas sin finalizar",
             }),

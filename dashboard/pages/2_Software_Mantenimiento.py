@@ -111,9 +111,10 @@ with tab_crear:
                 asignables["id"],
                 asignables["nombre"] + " — " + asignables["tipo"].map({"interno": "mecánico interno", "externo": "taller externo"}),
             ))
-            asignado_id = st.selectbox(
+            asignados_ids = st.multiselect(
                 "Asignar a", options=asignables["id"].tolist(),
-                format_func=lambda i: etiqueta_asignado.get(i, i), key="ot_asignado_id",
+                format_func=lambda i: etiqueta_asignado.get(i, i), key="ot_asignados_ids",
+                help="Puede ir a más de uno a la vez -- por ejemplo, una pareja de mecánicos.",
             )
 
         st.caption(
@@ -309,18 +310,21 @@ with tab_crear:
                         st.rerun()
 
             if st.button("Ver borrador de la OT", key="ot_ver_borrador"):
-                st.session_state["ot_borrador"] = list(carrito)
+                if not asignados_ids:
+                    st.warning("Elige a quién asignar la OT (Asignar a, arriba) antes de ver el borrador.")
+                else:
+                    st.session_state["ot_borrador"] = list(carrito)
 
         borrador = st.session_state.get("ot_borrador")
         if borrador:
             st.markdown("#### Borrador de la OT")
-            asignado_nombre = etiqueta_asignado.get(asignado_id, asignado_id)
+            asignados_nombres = ", ".join(etiqueta_asignado.get(i, str(i)) for i in asignados_ids)
             tipo_resumen = ot.TIPO_TRABAJO_LABEL[ot.tipo_trabajo_resumen(borrador)]
             patentes_borrador = sorted({it["patente"] for it in borrador})
             with st.container(border=True):
                 st.markdown(f"**Fecha:** {fecha_prog.strftime('%d-%m-%Y')} — **Turno:** {ot.TURNO_LABEL[turno_sel]}")
                 st.markdown(f"**Camiones:** {', '.join(nombre_por_patente.get(p, p) for p in patentes_borrador)}")
-                st.markdown(f"**Asignado a:** {asignado_nombre}")
+                st.markdown(f"**Asignado a:** {asignados_nombres or '—'}")
                 st.markdown(f"**Tipo de trabajo:** {tipo_resumen}")
                 st.markdown("**Ítems:**")
                 for categoria in ("inspeccion", "ticket", "item_key"):
@@ -337,14 +341,16 @@ with tab_crear:
                 if st.button("✅ Aprobar y enviar", type="primary", key="ot_aprobar"):
                     resultado = ot.crear_y_enviar_ot(
                         engine, fecha_programada=fecha_prog, turno=turno_sel,
-                        asignado_id=asignado_id, items=borrador, creado_por=usuario["nombre"],
+                        asignados_ids=asignados_ids, items=borrador, creado_por=usuario["nombre"],
                     )
                     mensaje = f"OT {resultado['numero_ot']} creada y enviada."
-                    if resultado["email_enviado"]:
-                        mensaje += " Email enviado al taller externo."
-                        flash("success", mensaje)
-                    elif resultado["email_error"]:
-                        flash("warning", f"{mensaje} La OT quedó creada, pero no se pudo enviar el email: {resultado['email_error']}")
+                    if resultado["emails_enviados"]:
+                        mensaje += f" Email enviado a: {', '.join(resultado['emails_enviados'])}."
+                    if resultado["emails_error"]:
+                        flash(
+                            "warning",
+                            f"{mensaje} No se pudo enviar el email a: {'; '.join(resultado['emails_error'])}.",
+                        )
                     else:
                         flash("success", mensaje)
                     del st.session_state["ot_borrador"]
@@ -378,11 +384,11 @@ with tab_seguimiento:
         st.dataframe(
             tabla_mostrar[[
                 "numero_ot", "fecha_programada", "turno", "patentes", "tipo_trabajo",
-                "asignado_nombre", "asignado_tipo", "estado", "creado_at", "completado_at",
+                "asignados_nombres", "estado", "creado_at", "completado_at",
             ]].rename(columns={
                 "numero_ot": "OT", "fecha_programada": "Fecha", "turno": "Turno",
                 "patentes": "Camiones", "tipo_trabajo": "Tipo",
-                "asignado_nombre": "Asignado a", "asignado_tipo": "Tipo asignado",
+                "asignados_nombres": "Asignado a",
                 "estado": "Estado", "creado_at": "Creada", "completado_at": "Completada",
             }),
             hide_index=True, width="stretch",

@@ -21,11 +21,15 @@ from sqlalchemy import select
 
 from src import config
 from src.db import (
-    inspeccion_checklist_catalogo, inspeccion_checklist_respuestas,
+    inspeccion_checklist_catalogo, inspeccion_checklist_respuestas, inspeccion_checklist_fotos,
     ot_item_sistema, ot_item_fotos,
-    replace_checklist_catalogo, guardar_respuestas_checklist,
+    replace_checklist_catalogo, guardar_respuestas_checklist, guardar_fotos_checklist,
     guardar_sistema_ot_item, guardar_foto_ot_item,
 )
+
+# Ítems del checklist a los que, además de la foto, se les pide una
+# lectura de texto (ej. el número que muestra el horómetro).
+ITEMS_CON_VALOR = {"Horómetro"}
 
 FOTOS_DIR = config.ROOT_DIR / "data" / "fotos_ot"
 
@@ -154,21 +158,24 @@ def ruta_absoluta(ruta_relativa: str) -> Path:
 
 
 def guardar_checklist_completo(engine, ot_id: int, ot_item_id: int, respuestas: list[dict]):
-    """`respuestas`: lista de {catalogo_id, estado, observacion, archivo}
-    (archivo puede ser None). Guarda la foto de cada ítem que tenga una, y
-    después inserta todas las filas de respuesta de una vez.
+    """`respuestas`: lista de {catalogo_id, estado, observacion, valor,
+    archivos} (`archivos` es una lista, puede venir vacía -- se puede
+    subir más de una foto por ítem). Guarda todas las fotos y después
+    inserta todas las filas de respuesta de una vez.
     """
     filas = []
+    fotos_filas = []
     for r in respuestas:
-        foto_ruta = None
-        if r.get("archivo") is not None:
-            foto_ruta = guardar_foto(ot_id, r["archivo"], prefijo=f"chk{r['catalogo_id']}")
+        for archivo in (r.get("archivos") or []):
+            ruta = guardar_foto(ot_id, archivo, prefijo=f"chk{r['catalogo_id']}")
+            fotos_filas.append({"ot_item_id": ot_item_id, "catalogo_id": r["catalogo_id"], "ruta": ruta})
         filas.append({
             "ot_item_id": ot_item_id, "catalogo_id": r["catalogo_id"],
             "estado": r["estado"], "observacion": r.get("observacion") or None,
-            "foto_ruta": foto_ruta,
+            "valor": r.get("valor") or None, "foto_ruta": None,
         })
     guardar_respuestas_checklist(engine, filas)
+    guardar_fotos_checklist(engine, fotos_filas)
 
 
 def guardar_sistema_y_fotos(engine, ot_id: int, ot_item_id: int, sistema: str | None, foto_antes, foto_despues):
@@ -189,13 +196,15 @@ def guardar_sistema_y_fotos(engine, ot_id: int, ot_item_id: int, sistema: str | 
 
 def checklist_de_ot_item(engine, ot_item_id: int) -> pd.DataFrame:
     """Respuestas guardadas de un ot_item de Inspección, con el nombre del
-    ítem del catálogo -- para revisar una OT ya completada.
+    ítem del catálogo y la lista de fotos de cada uno (puede haber más de
+    una) -- para revisar una OT ya completada.
     """
     stmt = (
         select(
+            inspeccion_checklist_respuestas.c.catalogo_id,
             inspeccion_checklist_catalogo.c.grupo, inspeccion_checklist_catalogo.c.item,
             inspeccion_checklist_respuestas.c.estado, inspeccion_checklist_respuestas.c.observacion,
-            inspeccion_checklist_respuestas.c.foto_ruta,
+            inspeccion_checklist_respuestas.c.valor, inspeccion_checklist_respuestas.c.foto_ruta,
         )
         .join(
             inspeccion_checklist_catalogo,
@@ -205,7 +214,30 @@ def checklist_de_ot_item(engine, ot_item_id: int) -> pd.DataFrame:
         .order_by(inspeccion_checklist_catalogo.c.orden)
     )
     with engine.connect() as conn:
-        return pd.read_sql(stmt, conn)
+        df = pd.read_sql(stmt, conn)
+    if df.empty:
+        df["fotos"] = pd.Series(dtype=object)
+        return df
+
+    with engine.connect() as conn:
+        fotos_df = pd.read_sql(
+            select(inspeccion_checklist_fotos.c.catalogo_id, inspeccion_checklist_fotos.c.ruta)
+            .where(inspeccion_checklist_fotos.c.ot_item_id == ot_item_id),
+            conn,
+        )
+    fotos_por_catalogo = fotos_df.groupby("catalogo_id")["ruta"].apply(list) if not fotos_df.empty else {}
+
+    def _fotos_de(fila):
+        # Respuestas nuevas guardan todas sus fotos en `inspeccion_checklist_fotos`;
+        # `foto_ruta` queda solo por compatibilidad con respuestas de antes
+        # de permitir más de una foto por ítem.
+        multiples = fotos_por_catalogo.get(fila["catalogo_id"], [])
+        if multiples:
+            return list(multiples)
+        return [fila["foto_ruta"]] if fila["foto_ruta"] else []
+
+    df["fotos"] = df.apply(_fotos_de, axis=1)
+    return df
 
 
 def sistema_de_ot_item(engine, ot_item_id: int) -> str | None:

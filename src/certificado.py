@@ -55,7 +55,7 @@ def _fila_dato(pdf, etiqueta, valor):
     # new_x/new_y explícitos: por defecto multi_cell deja el cursor donde
     # terminó de escribir (no en el margen izquierdo), así que sin esto la
     # siguiente fila se intenta dibujar fuera de la página.
-    pdf.multi_cell(0, 7, valor or "—", new_x="LMARGIN", new_y="NEXT")
+    pdf.multi_cell(0, 7, valor or "-", new_x="LMARGIN", new_y="NEXT")
 
 
 def _titulo_seccion(pdf, texto):
@@ -104,8 +104,10 @@ def generar_certificado(detalle: dict, nombre_corto: str) -> bytes:
     _fila_dato(pdf, "Ítem", detalle["descripcion"] or detalle["referencia"])
     _fila_dato(pdf, "Realizado por", detalle["completado_por"])
     completado_at = detalle["completado_at"]
-    _fila_dato(pdf, "Fecha de ejecución", completado_at.strftime("%d-%m-%Y %H:%M") if completado_at else "—")
+    _fila_dato(pdf, "Fecha de ejecución", completado_at.strftime("%d-%m-%Y %H:%M") if completado_at else "-")
     _fila_dato(pdf, "Solicitado por", detalle["creado_por"])
+    if detalle.get("comentario"):
+        _fila_dato(pdf, "Comentario", detalle["comentario"])
 
     if detalle["tipo_item"] == "inspeccion":
         _titulo_seccion(pdf, f"Checklist: {detalle['referencia']}")
@@ -134,15 +136,22 @@ def generar_certificado(detalle: dict, nombre_corto: str) -> bytes:
                 pdf.set_font("Helvetica", "I", 9)
                 pdf.set_text_color(*_GRIS)
                 pdf.multi_cell(0, 5, f"   {fila['observacion']}", new_x="LMARGIN", new_y="NEXT")
+            if fila.get("valor"):
+                pdf.set_font("Helvetica", "I", 9)
+                pdf.set_text_color(*_GRIS)
+                pdf.multi_cell(0, 5, f"   Lectura: {fila['valor']}", new_x="LMARGIN", new_y="NEXT")
         _titulo_seccion(pdf, "Fotos de respaldo")
         for _, fila in checklist.iterrows():
-            _agregar_foto(pdf, fila["foto_ruta"], fila["item"], ancho=70)
+            fotos_item = fila["fotos"] or []
+            for i, ruta in enumerate(fotos_item):
+                etiqueta = fila["item"] if i == 0 else f"{fila['item']} ({i + 1})"
+                _agregar_foto(pdf, ruta, etiqueta, ancho=70)
 
     elif detalle["tipo_item"] == "ticket":
         _titulo_seccion(pdf, "Detalle de la falla")
         ticket = detalle.get("ticket") or {}
-        _fila_dato(pdf, "N° ticket Datascope", f"#{ticket.get('code', '—')}")
-        _fila_dato(pdf, "Descripción original", ticket.get("description") or ticket.get("name") or "—")
+        _fila_dato(pdf, "N° ticket Datascope", f"#{ticket.get('code', '-')}")
+        _fila_dato(pdf, "Descripción original", ticket.get("description") or ticket.get("name") or "-")
         _fila_dato(pdf, "Sistema trabajado", detalle.get("sistema"))
         _fila_dato(pdf, "Notas de cierre", detalle.get("notas_cierre"))
         fotos = detalle["fotos"]

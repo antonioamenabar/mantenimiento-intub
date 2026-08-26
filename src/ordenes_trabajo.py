@@ -19,7 +19,7 @@ import pandas as pd
 from sqlalchemy import select, func, or_
 
 from src.db import (
-    mecanicos_talleres, ordenes_trabajo, ot_items, tickets,
+    mecanicos_talleres, ordenes_trabajo, ot_items, ot_asignados, tickets,
     upsert_mecanico_taller, crear_orden_trabajo, actualizar_estado_ot,
 )
 from src.queries import PRIORIDADES, PRIORIDAD_LABEL, _dias_antiguedad
@@ -207,16 +207,18 @@ def _siguiente_numero_ot(engine) -> str:
 
 
 def crear_y_enviar_ot(
-    engine, fecha_programada, turno: str, asignado_id: int, items: list[dict], creado_por: str,
+    engine, fecha_programada, turno: str, asignados_ids: list[int], items: list[dict], creado_por: str,
 ) -> dict:
-    """Crea la OT con sus ítems y la despacha:
-      - si el asignado es un mecánico interno -> queda visible de inmediato
-        en "Mis OTs" (no hace falta hacer nada más, es la misma tabla).
-      - si es un taller externo -> se le manda un email con el detalle.
+    """Crea la OT con sus ítems y la despacha. Puede ir a más de un
+    mecánico/taller a la vez (trabajan en parejas):
+      - a cada asignado interno -> le queda visible de inmediato en
+        "Mis OTs" (no hace falta hacer nada más, es la misma tabla).
+      - a cada asignado externo con contacto -> se le manda un email con
+        el detalle (uno por taller, si se asignó más de uno).
     Una sola OT puede traer ítems de Inspección, Fallas y Mantenimiento
     Programado a la vez, de camiones distintos -- cada ítem trae su propia
     `patente` (ver `tipo_trabajo_resumen` para el resumen de tipo).
-    Devuelve {"ot_id", "numero_ot", "email_enviado", "email_error"}.
+    Devuelve {"ot_id", "numero_ot", "emails_enviados", "emails_error"}.
     """
     ahora = datetime.now()
     numero_ot = _siguiente_numero_ot(engine)
@@ -224,23 +226,26 @@ def crear_y_enviar_ot(
     fecha_str = fecha_programada.strftime("%Y-%m-%d") if hasattr(fecha_programada, "strftime") else str(fecha_programada)
     ot_id = crear_orden_trabajo(engine, {
         "numero_ot": numero_ot, "patente": None, "fecha_programada": fecha_str, "turno": turno,
-        "tipo_trabajo": tipo_trabajo, "asignado_id": asignado_id, "estado": "enviada",
+        "tipo_trabajo": tipo_trabajo, "asignado_id": None, "estado": "enviada",
         "creado_por": creado_por, "creado_at": ahora, "enviado_at": ahora,
-    }, items)
+    }, items, asignados_ids=asignados_ids)
 
-    asignado = mecanicos_talleres_activos(engine)
-    asignado = asignado[asignado["id"] == asignado_id]
-    asignado = asignado.iloc[0].to_dict() if not asignado.empty else None
+    asignables = mecanicos_talleres_activos(engine)
+    asignados = asignables[asignables["id"].isin(asignados_ids)].to_dict("records")
 
-    email_enviado, email_error = False, None
-    if asignado and asignado["tipo"] == "externo" and asignado.get("contacto"):
-        try:
-            _enviar_email_ot(numero_ot, fecha_str, turno, tipo_trabajo, items, asignado["contacto"])
-            email_enviado = True
-        except Exception as exc:  # noqa: BLE001 -- se muestra el motivo al Jefe, no se rompe la OT
-            email_error = str(exc)
+    emails_enviados, emails_error = [], []
+    for asignado in asignados:
+        if asignado["tipo"] == "externo" and asignado.get("contacto"):
+            try:
+                _enviar_email_ot(numero_ot, fecha_str, turno, tipo_trabajo, items, asignado["contacto"])
+                emails_enviados.append(asignado["nombre"])
+            except Exception as exc:  # noqa: BLE001 -- se muestra el motivo al Jefe, no se rompe la OT
+                emails_error.append(f"{asignado['nombre']}: {exc}")
 
-    return {"ot_id": ot_id, "numero_ot": numero_ot, "email_enviado": email_enviado, "email_error": email_error}
+    return {
+        "ot_id": ot_id, "numero_ot": numero_ot,
+        "emails_enviados": emails_enviados, "emails_error": emails_error,
+    }
 
 
 TURNO_LABEL = {"diurno": "Diurno", "nocturno": "Nocturno"}
@@ -290,25 +295,25 @@ def _enviar_email_ot(numero_ot: str, fecha_str: str, turno: str, tipo_trabajo: s
 # ---------------------------------------------------------------------------
 
 def _cargar_ots(engine, where=None) -> pd.DataFrame:
-    stmt = (
-        select(
-            ordenes_trabajo, mecanicos_talleres.c.nombre.label("asignado_nombre"),
-            mecanicos_talleres.c.tipo.label("asignado_tipo"),
-        )
-        .join(mecanicos_talleres, mecanicos_talleres.c.id == ordenes_trabajo.c.asignado_id, isouter=True)
-        .order_by(ordenes_trabajo.c.creado_at.desc())
-    )
+    stmt = select(ordenes_trabajo).order_by(ordenes_trabajo.c.creado_at.desc())
     if where is not None:
         stmt = stmt.where(where)
     with engine.connect() as conn:
         df = pd.read_sql(stmt, conn)
     if df.empty:
         df["patentes"] = pd.Series(dtype=str)
+        df["asignados_nombres"] = pd.Series(dtype=str)
         return df
 
     with engine.connect() as conn:
         items_df = pd.read_sql(
             select(ot_items.c.ot_id, ot_items.c.patente).where(ot_items.c.ot_id.in_(df["id"].tolist())), conn,
+        )
+        asignados_df = pd.read_sql(
+            select(ot_asignados.c.ot_id, mecanicos_talleres.c.nombre)
+            .join(mecanicos_talleres, mecanicos_talleres.c.id == ot_asignados.c.mecanico_id)
+            .where(ot_asignados.c.ot_id.in_(df["id"].tolist())),
+            conn,
         )
     # Camiones distintos que trae la OT, para mostrar en el listado -- una
     # OT ya no es de un solo camión, así que la columna "patente" de la
@@ -318,12 +323,21 @@ def _cargar_ots(engine, where=None) -> pd.DataFrame:
         .apply(lambda s: ", ".join(sorted(set(s))))
     )
     df["patentes"] = df["id"].map(patentes_por_ot).fillna("—")
+    # Puede ir a más de un mecánico/taller a la vez (trabajan en parejas).
+    asignados_por_ot = asignados_df.groupby("ot_id")["nombre"].apply(lambda s: ", ".join(s))
+    df["asignados_nombres"] = df["id"].map(asignados_por_ot).fillna("—")
     return df
 
 
 def ots_de_usuario(engine, usuario_id: int) -> pd.DataFrame:
-    """OTs asignadas a un mecánico interno (su propia sesión)."""
-    return _cargar_ots(engine, where=(mecanicos_talleres.c.usuario_id == usuario_id))
+    """OTs asignadas a un mecánico interno (su propia sesión) -- incluye
+    las que comparte con otro mecánico (van en pareja)."""
+    ot_ids_del_usuario = (
+        select(ot_asignados.c.ot_id)
+        .join(mecanicos_talleres, mecanicos_talleres.c.id == ot_asignados.c.mecanico_id)
+        .where(mecanicos_talleres.c.usuario_id == usuario_id)
+    )
+    return _cargar_ots(engine, where=ordenes_trabajo.c.id.in_(ot_ids_del_usuario))
 
 
 def ots_todas(engine, estado: str | None = None) -> pd.DataFrame:
@@ -349,27 +363,31 @@ def item_por_id(engine, ot_item_id: int) -> dict | None:
 
 def completar_item(
     engine, ot_item_id: int, completado_por: str,
-    horometro: int | None = None, notas: str = "",
+    horometro: int | None = None, comentario: str = "",
 ):
     """Cierra UN ítem puntual de la OT, independiente del resto -- el
     mecánico va marcando cada Inspección/Falla/Mantenimiento como
     "Finalizar tarea" a medida que las termina, sin esperar a cerrar toda
-    la OT. Si es un ítem de Mantenimiento Programado, registra el evento
-    real ahí mismo (no se espera al cierre de la OT completa), así el
-    Dashboard se entera apenas se hace el trabajo.
+    la OT. `comentario` es libre y opcional, para cualquier tipo de tarea.
+    Si es un ítem de Mantenimiento Programado, registra el evento real ahí
+    mismo (no se espera al cierre de la OT completa), así el Dashboard se
+    entera apenas se hace el trabajo.
     """
     ahora = datetime.now()
     fila_item = item_por_id(engine, ot_item_id)
     with engine.begin() as conn:
         conn.execute(
             ot_items.update().where(ot_items.c.id == ot_item_id)
-            .values(estado="completada", completado_at=ahora, completado_por=completado_por)
+            .values(
+                estado="completada", completado_at=ahora, completado_por=completado_por,
+                comentario=comentario or None,
+            )
         )
     if fila_item and fila_item["tipo_item"] == "item_key":
         planificacion.registrar_evento(
             engine, patente=fila_item["patente"], items=[fila_item["referencia"]], fecha=ahora.date(),
             horometro=horometro, tecnico=completado_por,
-            detalle=notas, registrado_por=completado_por, ot_item_id=ot_item_id,
+            detalle=comentario, registrado_por=completado_por, ot_item_id=ot_item_id,
         )
 
 

@@ -23,7 +23,7 @@ def _completados(engine, patente: str, tipo_item: str) -> pd.DataFrame:
         select(
             ot_items.c.id.label("ot_item_id"), ot_items.c.referencia, ot_items.c.descripcion,
             ordenes_trabajo.c.numero_ot,
-            ot_items.c.completado_at, ot_items.c.completado_por,
+            ot_items.c.completado_at, ot_items.c.completado_por, ot_items.c.comentario,
             ordenes_trabajo.c.notas_cierre,
         )
         .join(ordenes_trabajo, ordenes_trabajo.c.id == ot_items.c.ot_id)
@@ -73,7 +73,7 @@ def detalle_item_completo(engine, ot_item_id: int) -> dict | None:
             # puntual ya estaba listo (o quedarse abierta con otros
             # ítems pendientes), así que la fecha/quién correcta es la
             # de este ítem.
-            ot_items.c.completado_por, ot_items.c.completado_at,
+            ot_items.c.completado_por, ot_items.c.completado_at, ot_items.c.comentario,
             ordenes_trabajo.c.numero_ot,
             ordenes_trabajo.c.creado_por, ordenes_trabajo.c.creado_at,
             ordenes_trabajo.c.notas_cierre,

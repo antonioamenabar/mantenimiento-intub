@@ -203,6 +203,8 @@ def _migrar_columnas_nuevas(engine):
         ("ot_items", "completado_at", "TIMESTAMP"),
         ("ot_items", "completado_por", "VARCHAR(60)"),
         ("ordenes_trabajo", "notas_pendientes", "TEXT"),
+        ("ot_items", "comentario", "TEXT"),
+        ("inspeccion_checklist_respuestas", "valor", "VARCHAR(60)"),
     ]
 
     def _nombre_completo(tabla):
@@ -236,6 +238,20 @@ def _migrar_columnas_nuevas(engine):
                 f"AND ot_id IN (SELECT id FROM {ot} WHERE estado = 'completada')"
             ))
             conn.execute(text(f"UPDATE {oi} SET estado = 'pendiente' WHERE estado IS NULL"))
+
+    # Backfill: OTs viejas, de un solo mecánico en `asignado_id` -- se
+    # copian a la tabla puente `ot_asignados` (una fila), para que de acá
+    # en adelante todo se lea desde ahí sin importar si la OT es vieja o
+    # nueva. Idempotente: no duplica si ya se corrió antes.
+    if "ordenes_trabajo" in tablas_existentes and "ot_asignados" in tablas_existentes:
+        ot = f"{_nombre_completo('ordenes_trabajo')}"
+        oa = f"{_nombre_completo('ot_asignados')}"
+        with engine.begin() as conn:
+            conn.execute(text(
+                f"INSERT INTO {oa} (ot_id, mecanico_id) "
+                f"SELECT id, asignado_id FROM {ot} WHERE asignado_id IS NOT NULL "
+                f"AND id NOT IN (SELECT DISTINCT ot_id FROM {oa})"
+            ))
 
 
 def init_db(engine=None):
@@ -393,7 +409,10 @@ ordenes_trabajo = Table(
     Column("fecha_programada", String(10), nullable=True),  # "YYYY-MM-DD", cuándo se hace el trabajo
     Column("turno", String(10), nullable=True),  # "diurno" | "nocturno"
     Column("tipo_trabajo", String(30)),  # inspeccion | fallas | mantenimiento_programado | mixta
-    Column("asignado_id", Integer, index=True),  # FK mecanicos_talleres.id
+    # `asignado_id` queda solo por compatibilidad con OTs viejas (una OT ya
+    # puede ir a más de un mecánico a la vez, porque trabajan en parejas --
+    # ver tabla `ot_asignados`). No se usa en OTs nuevas.
+    Column("asignado_id", Integer, index=True, nullable=True),  # FK mecanicos_talleres.id
     Column("estado", String(20), index=True),  # borrador | enviada | completada | cancelada
     Column("creado_por", String(60), nullable=True),
     Column("creado_at", DateTime),
@@ -428,6 +447,20 @@ ot_items = Table(
     Column("estado", String(20), nullable=True),
     Column("completado_at", DateTime, nullable=True),
     Column("completado_por", String(60), nullable=True),
+    # Comentario libre y opcional que el mecánico puede dejar en cualquier
+    # tarea (Inspección, Falla o Mantenimiento Programado) al finalizarla.
+    Column("comentario", Text, nullable=True),
+)
+
+# Una OT puede ir asignada a más de un mecánico a la vez (trabajan en
+# parejas) -- tabla puente, sin límite de cuántos. `mecanico_id` referencia
+# `mecanicos_talleres.id` (puede ser un mecánico interno o un taller
+# externo, igual que antes).
+ot_asignados = Table(
+    "ot_asignados",
+    metadata,
+    Column("ot_id", Integer, primary_key=True),
+    Column("mecanico_id", Integer, primary_key=True),
 )
 
 # ---------------------------------------------------------------------------
@@ -459,9 +492,28 @@ inspeccion_checklist_respuestas = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("ot_item_id", Integer, index=True),
     Column("catalogo_id", Integer, index=True),
-    Column("estado", String(20)),  # "normal" | "fuera_normal"
+    Column("estado", String(20)),  # "normal" | "fuera_normal" | "no_aplica"
     Column("observacion", Text, nullable=True),
+    # `foto_ruta` queda solo por compatibilidad con respuestas viejas (una
+    # sola foto por ítem). Las nuevas permiten más de una foto -- ver
+    # `inspeccion_checklist_fotos`.
     Column("foto_ruta", String(255), nullable=True),
+    # Lectura de texto libre para ítems como "Horómetro" (además de la
+    # foto) -- NULL para el resto de los ítems del checklist.
+    Column("valor", String(60), nullable=True),
+)
+
+# Fotos de un ítem del checklist de Inspección -- puede subirse más de una
+# por ítem (a diferencia de `foto_ruta`, que era una sola). Se enlaza por
+# (ot_item_id, catalogo_id) en vez del id de la respuesta, para poder
+# guardarlas junto con las respuestas en el mismo paso.
+inspeccion_checklist_fotos = Table(
+    "inspeccion_checklist_fotos",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("ot_item_id", Integer, index=True),
+    Column("catalogo_id", Integer, index=True),
+    Column("ruta", String(255)),
 )
 
 # Qué sistema se trabajó en un ot_item de Fallas (tipo_item="ticket") --
@@ -522,9 +574,10 @@ def actualizar_password(engine, usuario_id: int, password_hash: str):
         )
 
 
-def crear_orden_trabajo(engine, ot: dict, items: list[dict]) -> int:
-    """Crea la OT (cabecera) y sus ítems en una sola transacción. Devuelve
-    el id de la OT creada.
+def crear_orden_trabajo(engine, ot: dict, items: list[dict], asignados_ids: list[int] | None = None) -> int:
+    """Crea la OT (cabecera), sus ítems y a quién va asignada -- puede ser
+    más de un mecánico a la vez (trabajan en parejas) -- en una sola
+    transacción. Devuelve el id de la OT creada.
     """
     with engine.begin() as conn:
         result = conn.execute(ordenes_trabajo.insert().values(**ot))
@@ -537,6 +590,11 @@ def crear_orden_trabajo(engine, ot: dict, items: list[dict]) -> int:
             conn.execute(
                 ot_items.insert(),
                 [{"estado": "pendiente", **it, "ot_id": ot_id} for it in items],
+            )
+        if asignados_ids:
+            conn.execute(
+                ot_asignados.insert(),
+                [{"ot_id": ot_id, "mecanico_id": mid} for mid in dict.fromkeys(asignados_ids)],
             )
         return ot_id
 
@@ -562,6 +620,15 @@ def guardar_respuestas_checklist(engine, filas: list[dict]):
         return
     with engine.begin() as conn:
         conn.execute(inspeccion_checklist_respuestas.insert(), filas)
+
+
+def guardar_fotos_checklist(engine, filas: list[dict]):
+    """`filas`: [{ot_item_id, catalogo_id, ruta}] -- puede haber más de una
+    fila por ítem del checklist (varias fotos para el mismo ítem)."""
+    if not filas:
+        return
+    with engine.begin() as conn:
+        conn.execute(inspeccion_checklist_fotos.insert(), filas)
 
 
 def guardar_sistema_ot_item(engine, ot_item_id: int, sistema: str):
