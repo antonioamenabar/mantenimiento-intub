@@ -6,6 +6,7 @@ izquierda (páginas de Streamlit) muestra:
   - Software de Mantenimiento  -- crear/asignar/cancelar OTs, "jefe"/"supervisor"
   - Mis OTs                    -- ver y completar OTs asignadas, todos menos "admin"
   - Hoja de Vida                -- historial por camión, "jefe"/"supervisor"
+  - Programa de Mantenimiento   -- intervalos por componente, "jefe"/"supervisor"
   - Administración              -- crea cuentas de Jefe/Supervisor, solo "admin"
 
 Uso:
@@ -58,7 +59,9 @@ else:
             "administrar mecánicos y talleres.\n"
             "- **Mis OTs** -- seguimiento de todas las OTs y su estado.\n"
             "- **Hoja de Vida** -- historial completo de cada camión, con Certificado de "
-            "Mantención descargable por registro."
+            "Mantención descargable por registro.\n"
+            "- **Programa de Mantenimiento** -- cada cuánto corresponde cada trabajo "
+            "(horas, kilometraje y/o calendario)."
         )
     elif usuario["rol"] == "admin":
         st.markdown("- **Administración** -- crear y administrar cuentas de Jefe de Mantenimiento / Supervisor.")

@@ -38,6 +38,7 @@ from src.queries import _load_flota
 
 CATEGORIA_LABEL = {"camion": "Camión", "equipo": "Equipo"}
 CONFIANZA_LABEL = {"confirmado": "Confirmado", "estimado": "Estimado", "sindato": "Sin dato"}
+CONFIANZA_BADGE = {"confirmado": "🟢", "estimado": "🟡", "sindato": "🔴"}
 
 # (item_key, categoria, nombre, orden)
 ITEMS = [
@@ -57,37 +58,40 @@ ITEMS = [
     ("neumatico_equipo", "equipo", "Neumático equipo", 14),
 ]
 
-# (item_key, marca, modelo, intervalo_meses, intervalo_horas, confianza, fuente)
-# marca/modelo en None = regla genérica para ese item_key.
+# (item_key, marca, modelo, intervalo_meses, intervalo_horas, intervalo_km, confianza, fuente)
+# marca/modelo en None = regla genérica para ese item_key. `intervalo_km`
+# queda en None para todo -- la flota se trackea por horómetro, no por
+# odómetro; se completa el día que algún camión empiece a registrarse por
+# kilometraje.
 REGLAS = [
     # --- Camión (chasis): mismo ciclo estándar de industria para todos ---
-    ("motor_aceite", None, None, 3, 500, "estimado", "Práctica estándar de industria (chasis diésel pesado)"),
-    ("filtro_combustible", None, None, 3, 500, "estimado", "Práctica estándar de industria"),
-    ("filtro_aire", None, None, 3, 500, "estimado", "Práctica estándar de industria"),
-    ("frenos", None, None, 3, 500, "estimado", "Práctica estándar de industria"),
-    ("neumaticos", None, None, 3, 500, "estimado", "Práctica estándar de industria"),
-    ("caja_cambios", None, None, 12, None, "estimado", "Práctica estándar de industria"),
-    ("diferencial", None, None, 12, None, "estimado", "Práctica estándar de industria"),
-    ("suspension", None, None, 12, None, "estimado", "Práctica estándar de industria"),
+    ("motor_aceite", None, None, 3, 500, None, "estimado", "Práctica estándar de industria (chasis diésel pesado)"),
+    ("filtro_combustible", None, None, 3, 500, None, "estimado", "Práctica estándar de industria"),
+    ("filtro_aire", None, None, 3, 500, None, "estimado", "Práctica estándar de industria"),
+    ("frenos", None, None, 3, 500, None, "estimado", "Práctica estándar de industria"),
+    ("neumaticos", None, None, 3, 500, None, "estimado", "Práctica estándar de industria"),
+    ("caja_cambios", None, None, 12, None, None, "estimado", "Práctica estándar de industria"),
+    ("diferencial", None, None, 12, None, None, "estimado", "Práctica estándar de industria"),
+    ("suspension", None, None, 12, None, None, "estimado", "Práctica estándar de industria"),
 
     # --- Equipo: genéricos (fallback cuando no se conoce el componente) ---
-    ("bomba_agua", None, None, 6, 1000, "sindato", "Sin marca conocida -- ciclo genérico de Equipo"),
-    ("bomba_vacio", None, None, 6, 1000, "sindato", "Sin marca conocida -- ciclo genérico de Equipo"),
-    ("pto", None, None, 6, 1000, "sindato", "Sin dato de marca ni intervalo -- pendiente placa"),
-    ("crucetas_cardanes", None, None, 1, None, "estimado", "Práctica general de engrase en camiones pesados"),
-    ("hidraulico_equipo", None, None, 6, 1000, "sindato", "Sin dato de marca ni intervalo"),
-    ("neumatico_equipo", None, None, 6, 1000, "sindato", "Sin dato de marca ni intervalo"),
+    ("bomba_agua", None, None, 6, 1000, None, "sindato", "Sin marca conocida -- ciclo genérico de Equipo"),
+    ("bomba_vacio", None, None, 6, 1000, None, "sindato", "Sin marca conocida -- ciclo genérico de Equipo"),
+    ("pto", None, None, 6, 1000, None, "sindato", "Sin dato de marca ni intervalo -- pendiente placa"),
+    ("crucetas_cardanes", None, None, 1, None, None, "estimado", "Práctica general de engrase en camiones pesados"),
+    ("hidraulico_equipo", None, None, 6, 1000, None, "sindato", "Sin dato de marca ni intervalo"),
+    ("neumatico_equipo", None, None, 6, 1000, None, "sindato", "Sin dato de marca ni intervalo"),
 
     # --- Equipo: confirmadas/estimadas por marca (investigación Programa de Mantenimiento) ---
-    ("bomba_agua", "Meyers", "DP-80", 3, 300, "confirmado", "Manual serie DP Meyers/Pentair (cambio de aceite 300 h)"),
-    ("bomba_vacio", "Roots", "824", 6, 2000, "confirmado", "Manual Roots 824 RCS -- aceite mineral, ~2.000 h a 82°C"),
-    ("bomba_agua", "Pratissoli", None, 6, 1000, "confirmado", "Manual oficial Pratissoli (serie KS: 1.000 h)"),
-    ("bomba_vacio", "Kaeser", "Omega 53P", 6, None, "confirmado", "Manual Kaeser Omega 53P -- cambio semestral"),
-    ("crucetas_cardanes", "Kaeser", None, 1, 40, "confirmado", "Manual Kaeser Omega 53P -- engrase crucetas PTO"),
-    ("bomba_agua", "Uraca", "KD716G", 6, 500, "estimado", "Sin manual oficial -- vida útil típica bombas plunger"),
-    ("bomba_vacio", "Wittig", "RFW 200", 6, 400, "estimado", "Folleto Wittig no especifica intervalo de cambio"),
-    ("bomba_vacio", "Vactor", None, 3, 250, "estimado", "Soplador tipo Roots/Hibon -- práctica de industria"),
-    ("hidraulico_equipo", "Vactor", None, 6, 500, "estimado", "Práctica de industria para hidráulico de equipo Vactor"),
+    ("bomba_agua", "Meyers", "DP-80", 3, 300, None, "confirmado", "Manual serie DP Meyers/Pentair (cambio de aceite 300 h)"),
+    ("bomba_vacio", "Roots", "824", 6, 2000, None, "confirmado", "Manual Roots 824 RCS -- aceite mineral, ~2.000 h a 82°C"),
+    ("bomba_agua", "Pratissoli", None, 6, 1000, None, "confirmado", "Manual oficial Pratissoli (serie KS: 1.000 h)"),
+    ("bomba_vacio", "Kaeser", "Omega 53P", 6, None, None, "confirmado", "Manual Kaeser Omega 53P -- cambio semestral"),
+    ("crucetas_cardanes", "Kaeser", None, 1, 40, None, "confirmado", "Manual Kaeser Omega 53P -- engrase crucetas PTO"),
+    ("bomba_agua", "Uraca", "KD716G", 6, 500, None, "estimado", "Sin manual oficial -- vida útil típica bombas plunger"),
+    ("bomba_vacio", "Wittig", "RFW 200", 6, 400, None, "estimado", "Folleto Wittig no especifica intervalo de cambio"),
+    ("bomba_vacio", "Vactor", None, 3, 250, None, "estimado", "Soplador tipo Roots/Hibon -- práctica de industria"),
+    ("hidraulico_equipo", "Vactor", None, 6, 500, None, "estimado", "Práctica de industria para hidráulico de equipo Vactor"),
 ]
 
 
@@ -102,10 +106,10 @@ def seed_catalogo_y_reglas(engine):
     replace_reglas_mantencion(engine, [
         {
             "item_key": item_key, "marca": marca, "modelo": modelo,
-            "intervalo_meses": meses, "intervalo_horas": horas,
+            "intervalo_meses": meses, "intervalo_horas": horas, "intervalo_km": km,
             "confianza": confianza, "fuente": fuente,
         }
-        for item_key, marca, modelo, meses, horas, confianza, fuente in REGLAS
+        for item_key, marca, modelo, meses, horas, km, confianza, fuente in REGLAS
     ])
 
 
@@ -201,7 +205,7 @@ def _cargar_reglas(engine) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=[
             "id", "item_key", "marca", "modelo", "intervalo_meses",
-            "intervalo_horas", "confianza", "fuente",
+            "intervalo_horas", "intervalo_km", "confianza", "fuente",
         ])
     return df
 
@@ -246,6 +250,68 @@ def _regla_para(reglas_df: pd.DataFrame, item_key: str, marca, modelo) -> dict |
     if not generica.empty:
         return generica.iloc[0].to_dict()
     return None
+
+
+def _texto_intervalo(intervalo_horas, intervalo_km, intervalo_meses) -> str:
+    """Texto tipo "500 horas o 3 meses calendario, lo que ocurra primero"
+    -- combina las unidades que la regla tenga definidas (puede tener una,
+    dos o las tres a la vez)."""
+    partes = []
+    if intervalo_horas:
+        partes.append(f"{intervalo_horas:,.0f} horas".replace(",", "."))
+    if intervalo_km:
+        partes.append(f"{intervalo_km:,.0f} km".replace(",", "."))
+    if intervalo_meses:
+        unidad = "mes" if intervalo_meses == 1 else "meses"
+        partes.append(f"{intervalo_meses} {unidad} calendario")
+    if not partes:
+        return "Sin dato"
+    if len(partes) == 1:
+        return partes[0]
+    return " o ".join(partes) + ", lo que ocurra primero"
+
+
+def programa_mantenimiento(engine) -> pd.DataFrame:
+    """El Programa de Mantenimiento completo: para cada componente, cada
+    regla conocida (la genérica y, si las hay, las específicas por marca/
+    modelo) con su intervalo en texto y qué camiones de la flota tienen
+    ese componente específico instalado -- para mostrar en una pantalla de
+    referencia, no para calcular vencimientos (eso lo hace
+    `matriz_mantenimiento`).
+    """
+    items_df = catalogo_items(engine)
+    reglas_df = _cargar_reglas(engine)
+    componentes_df = _cargar_componentes(engine)
+
+    filas = []
+    for _, item in items_df.iterrows():
+        reglas_item = reglas_df[reglas_df["item_key"] == item["item_key"]]
+        # La genérica (marca NULL) primero, después las específicas.
+        reglas_item = pd.concat([
+            reglas_item[reglas_item["marca"].isna()],
+            reglas_item[reglas_item["marca"].notna()].sort_values(["marca", "modelo"]),
+        ])
+        for _, regla in reglas_item.iterrows():
+            es_generica = pd.isna(regla["marca"])
+            if es_generica:
+                marca_modelo = "Genérico (sin marca conocida)"
+                camiones = []  # aplica "por defecto" a cualquier camión sin componente específico -- no se enumera acá
+            else:
+                marca_modelo = regla["marca"] + (f" {regla['modelo']}" if pd.notna(regla["modelo"]) else "")
+                filtro = (componentes_df["item_key"] == item["item_key"]) & (componentes_df["marca"] == regla["marca"])
+                if pd.notna(regla["modelo"]):
+                    filtro &= componentes_df["modelo"] == regla["modelo"]
+                camiones = sorted(componentes_df.loc[filtro, "patente"].tolist())
+            filas.append({
+                "categoria": item["categoria"], "nombre": item["nombre"], "orden": item["orden"],
+                "marca_modelo": marca_modelo, "es_generica": es_generica,
+                "intervalo_horas": regla["intervalo_horas"], "intervalo_km": regla["intervalo_km"],
+                "intervalo_meses": regla["intervalo_meses"],
+                "intervalo_texto": _texto_intervalo(regla["intervalo_horas"], regla["intervalo_km"], regla["intervalo_meses"]),
+                "confianza": regla["confianza"], "fuente": regla["fuente"],
+                "camiones": camiones,
+            })
+    return pd.DataFrame(filas)
 
 
 # ---------------------------------------------------------------------------

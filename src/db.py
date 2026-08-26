@@ -131,6 +131,10 @@ reglas_mantencion = Table(
     Column("modelo", String(60), nullable=True),
     Column("intervalo_meses", Integer, nullable=True),
     Column("intervalo_horas", Integer, nullable=True),
+    # Sin dato todavía para ningún componente -- la flota se trackea por
+    # horómetro, no por odómetro. Queda listo por si algún camión empieza
+    # a registrarse por kilometraje.
+    Column("intervalo_km", Integer, nullable=True),
     Column("confianza", String(12)),  # confirmado | estimado | sindato
     Column("fuente", Text),
 )
@@ -206,6 +210,7 @@ def _migrar_columnas_nuevas(engine):
         ("ot_items", "comentario", "TEXT"),
         ("inspeccion_checklist_respuestas", "valor", "VARCHAR(60)"),
         ("ordenes_trabajo", "motivo_cancelacion", "TEXT"),
+        ("reglas_mantencion", "intervalo_km", "INTEGER"),
     ]
 
     def _nombre_completo(tabla):

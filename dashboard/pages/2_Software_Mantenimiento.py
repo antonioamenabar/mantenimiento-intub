@@ -62,7 +62,7 @@ def _tabla_gris_html(filas_html: str, encabezados: list[str]) -> str:
     head = "".join(f"<th>{h}</th>" for h in encabezados)
     return f"""
     <style>
-      .tabla-gris {{ border-collapse: collapse; width: 100%; font-size: 13px; color: #888; }}
+      .tabla-gris {{ border-collapse: collapse; width: auto; font-size: 13px; color: #888; }}
       .tabla-gris th, .tabla-gris td {{
         border: 1px solid rgba(128,128,128,0.25); padding: 4px 8px; text-align: center;
         background: rgba(128,128,128,0.10);
@@ -190,7 +190,7 @@ with tab_crear:
                     # "seleccionada" una fila de otro camión por error.
                     seleccion_fallas = st.dataframe(
                         tabla_mostrar[["N°", "Descripción", "Criticidad", "Antigüedad (días)"]],
-                        hide_index=True, width="stretch",
+                        hide_index=True, width="content",
                         on_select="rerun", selection_mode="multi-row", key=f"ot_fallas_tabla_{patente_falla_sel}",
                     )
                     filas_sel = seleccion_fallas["selection"]["rows"] if seleccion_fallas else []
@@ -262,7 +262,7 @@ with tab_crear:
                     items_disp_mostrar[["categoria", "nombre", "horas_venc"]].rename(
                         columns={"categoria": "Grupo", "nombre": "Componente", "horas_venc": "Horas para el vencimiento"}
                     ),
-                    hide_index=True, width="stretch",
+                    hide_index=True, width="content",
                     on_select="rerun", selection_mode="multi-row", key=f"ot_mant_tabla_{patente_mant_sel}",
                 )
                 filas_sel_mant = seleccion_mant["selection"]["rows"] if seleccion_mant else []
