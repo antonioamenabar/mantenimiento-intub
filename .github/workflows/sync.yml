@@ -1,0 +1,37 @@
+name: Sincronizar Datascope
+
+# Corre en la nube de GitHub, no en el computador de nadie -- si Antonio
+# tiene el PC apagado, simplemente se salta ese horario y retoma el
+# siguiente sin ningún problema (a diferencia de la Tarea Programada de
+# Windows anterior, que solo corría si su PC estaba prendido).
+#
+# El repo definitivo es INTUB-PROYECTOS/proyecto-mantenimiento -- el
+# `if` de más abajo hace que esto NO se ejecute de verdad si este mismo
+# archivo llega también al repo personal-puente (mismo código, evita
+# sincronizar dos veces la misma base).
+on:
+  schedule:
+    - cron: "0 */3 * * *" # cada 3 horas en punto, hora UTC (Chile: resta 3 o 4h según horario de verano)
+  workflow_dispatch: {} # para poder correrlo a mano desde la pestaña "Actions", sin esperar el horario
+
+jobs:
+  sync:
+    if: github.repository == 'INTUB-PROYECTOS/proyecto-mantenimiento'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Sincronizar con Datascope
+        env:
+          DATASCOPE_API_KEY: ${{ secrets.DATASCOPE_API_KEY }}
+          DATASCOPE_FORM_ID: ${{ secrets.DATASCOPE_FORM_ID }}
+          DB_BACKEND: ${{ secrets.DB_BACKEND }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python -m src.sync
