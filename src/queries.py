@@ -28,7 +28,11 @@ def _parse_fecha(valor):
 
 
 def _primera_foto(fotos_str):
-    if not fotos_str:
+    # pd.isna(), no `if not fotos_str:` a secas: una columna de la base con
+    # NULL mezclado con texto real llega acá como NaN (float) vía pandas,
+    # y "not NaN" da False (NaN no es falsy) -- .split() sobre un float
+    # revienta con AttributeError.
+    if pd.isna(fotos_str) or not fotos_str:
         return None
     return fotos_str.split(", ")[0]
 
