@@ -1,0 +1,40 @@
+name: Snapshot semanal de Fallas
+
+# Reemplaza la Tarea Programada de Windows "Snapshot Fal..." del PC de
+# Antonio -- corre en la nube de GitHub, cada lunes, sin depender de que
+# ningún computador esté prendido.
+#
+# El script calcula "la semana que recién cerró" con la hora del momento
+# en que corre -- 12:00 UTC cae aprox. 8:00-9:00 AM hora de Chile según
+# horario de verano, y de cualquier forma sigue siendo lunes en ambos
+# husos horarios (no hay riesgo de que a la hora UTC ya sea martes).
+#
+# Mismo criterio que sync.yml: el archivo también llega al repo
+# personal-puente (mismo código), pero el `if` de abajo hace que solo se
+# ejecute de verdad en el repo definitivo del org.
+on:
+  schedule:
+    - cron: "0 12 * * 1" # todos los lunes a las 12:00 UTC
+  workflow_dispatch: {} # para poder correrlo a mano desde la pestaña "Actions"
+
+jobs:
+  snapshot:
+    if: github.repository == 'INTUB-PROYECTOS/proyecto-mantenimiento'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Guardar foto histórica de Fallas
+        env:
+          DATASCOPE_API_KEY: ${{ secrets.DATASCOPE_API_KEY }}
+          DATASCOPE_FORM_ID: ${{ secrets.DATASCOPE_FORM_ID }}
+          DB_BACKEND: ${{ secrets.DB_BACKEND }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python -m src.snapshot_fallas
