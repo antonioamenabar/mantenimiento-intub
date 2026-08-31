@@ -236,8 +236,13 @@ def fetch_tickets_no_cerrados(chunk_days: int = 90, max_chunks: int = 2) -> list
         for _ in range(max_chunks):
             inicio = fin - timedelta(days=chunk_days)
             raw = fetch_tickets(start=inicio.strftime("%d-%m-%Y"), end=fin.strftime("%d-%m-%Y"), status=estado)
-            if not raw:
-                break
+            # NO cortar la búsqueda solo porque este chunk vino vacío: un
+            # estado como "paused" puede no tener ningún ticket en los
+            # últimos 90 días y sí tener uno en el chunk anterior (bug real
+            # encontrado 31-08-2026 -- el ticket #355 de TWRD42, "paused"
+            # desde el 16-05-2026, no aparecía porque el chunk más reciente
+            # de "paused" estaba vacío y el `break` nunca llegaba a revisar
+            # el chunk donde sí estaba).
             for t in raw:
                 vistos[t["id"]] = t
             fin = inicio - timedelta(days=1)
