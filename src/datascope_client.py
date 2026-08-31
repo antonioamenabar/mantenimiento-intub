@@ -4,6 +4,7 @@ Documentación oficial: https://dscope.github.io/docs/
 Ojo: existe también "DataScope Select" de LSEG/Refinitiv, que es un producto
 financiero totalmente distinto — no confundir la documentación.
 """
+import time
 from datetime import date, timedelta
 
 import requests
@@ -11,6 +12,24 @@ import requests
 from src import config
 
 BASE_URL = "https://www.mydatascope.com/api/external"
+
+
+def _get_con_reintentos(url: str, params: dict, intentos: int = 3, timeout: int = 60) -> requests.Response:
+    """GET con reintentos y timeout generoso -- Datascope a veces responde
+    muy lento (se vio hasta ~23s una consulta que normalmente toma 2-3s) y
+    de vez en cuando directamente no responde a tiempo. Sin esto, un
+    timeout puntual tumba entera la sincronización (manual o la de GitHub
+    Actions, cada 1 hora).
+    """
+    ultimo_error = None
+    for intento in range(intentos):
+        try:
+            return requests.get(url, headers={"Authorization": config.DATASCOPE_API_KEY}, params=params, timeout=timeout)
+        except requests.exceptions.RequestException as exc:
+            ultimo_error = exc
+            if intento < intentos - 1:
+                time.sleep(5)
+    raise ultimo_error
 
 # Sin start/end, la API solo devuelve una ventana reciente por defecto
 # (~8 días), no el histórico completo. Además, start/end filtran por la
@@ -50,12 +69,7 @@ def fetch_form_answers(form_id: int, start: str | None = None, end: str | None =
     if end is None:
         end = date.today().isoformat()
 
-    resp = requests.get(
-        f"{BASE_URL}/answers",
-        headers={"Authorization": config.DATASCOPE_API_KEY},
-        params={"form_id": form_id, "start": start, "end": end},
-        timeout=30,
-    )
+    resp = _get_con_reintentos(f"{BASE_URL}/answers", params={"form_id": form_id, "start": start, "end": end})
     resp.raise_for_status()
     return resp.json() or []
 
@@ -173,12 +187,7 @@ def fetch_tickets(start: str | None = None, end: str | None = None, status: str 
     if status:
         params["status"] = status
 
-    resp = requests.get(
-        f"{BASE_URL}/findings/list",
-        headers={"Authorization": config.DATASCOPE_API_KEY},
-        params=params,
-        timeout=30,
-    )
+    resp = _get_con_reintentos(f"{BASE_URL}/findings/list", params=params)
     resp.raise_for_status()
     return resp.json() or []
 
