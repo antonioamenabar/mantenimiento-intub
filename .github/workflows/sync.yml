@@ -11,7 +11,7 @@ name: Sincronizar Datascope
 # sincronizar dos veces la misma base).
 on:
   schedule:
-    - cron: "0 */3 * * *" # cada 3 horas en punto, hora UTC (Chile: resta 3 o 4h según horario de verano)
+    - cron: "0 * * * *" # cada 1 hora en punto, hora UTC (Chile: resta 3 o 4h según horario de verano)
   workflow_dispatch: {} # para poder correrlo a mano desde la pestaña "Actions", sin esperar el horario
 
 jobs:
