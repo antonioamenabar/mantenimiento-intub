@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+import pandas as pd
 import streamlit as st
 
 from src import auth, db, queries, planificacion
@@ -76,26 +77,12 @@ def _dialog_detalle_fallas(patente: str, prioridad_key: str, bucket: str):
     else:
         st.dataframe(detalle, hide_index=True, width="stretch")
     if st.button("Cerrar"):
-        st.query_params.clear()
+        # Limpia la selección de la celda en la tabla (no query params -- el
+        # clic en la celda usa la selección nativa de st.dataframe, ver
+        # `render_fallas`) para que el popup no se vuelva a abrir solo en el
+        # próximo rerun.
+        st.session_state["tabla_fallas_sel"] = {"selection": {"rows": [], "columns": [], "cells": []}}
         st.rerun()
-
-
-def _revisar_query_params_fallas():
-    """Si la URL tiene ?falla_detalle=PATENTE|PRIORIDAD|CLAVE_ANTIGUEDAD (por
-    haber hecho clic en un número de la tabla de Fallas), abre el popup con
-    el detalle. Clic en la tabla = cambio de query param = rerun de
-    Streamlit, sin abrir pestaña ni ventana nueva.
-    """
-    valor = st.query_params.get("falla_detalle")
-    if not valor:
-        return
-    try:
-        patente, prioridad_key, bucket_key = valor.split("|")
-        bucket = queries.ANTIGUEDAD_KEY_INV[bucket_key]
-    except (ValueError, KeyError):
-        st.query_params.clear()
-        return
-    _dialog_detalle_fallas(patente, prioridad_key, bucket)
 
 
 @st.dialog("Historial de mantención")
@@ -112,23 +99,8 @@ def _dialog_detalle_mantenimiento(patente: str, item_key: str):
     else:
         st.dataframe(historial, hide_index=True, width="stretch")
     if st.button("Cerrar", key="cerrar_detalle_mant"):
-        st.query_params.clear()
+        st.session_state["tabla_mant_sel"] = {"selection": {"rows": [], "columns": [], "cells": []}}
         st.rerun()
-
-
-def _revisar_query_params_mantenimiento():
-    """Análogo a `_revisar_query_params_fallas`: ?mant_detalle=PATENTE|ITEM_KEY
-    abre el historial de ese ítem en un popup, sin pestaña nueva.
-    """
-    valor = st.query_params.get("mant_detalle")
-    if not valor:
-        return
-    try:
-        patente, item_key = valor.split("|")
-    except ValueError:
-        st.query_params.clear()
-        return
-    _dialog_detalle_mantenimiento(patente, item_key)
 
 
 def _icono(valor):
@@ -223,108 +195,22 @@ def _tabla_html(tabla, semana_inicio) -> str:
     """
 
 
-_COLOR_PRIORIDAD = {"Crítica": "#d32f2f", "Alta": "#f57c00", "Media": "#fbc02d", "Baja": "#388e3c"}
 _PRIORIDAD_LABEL_A_KEY = {v: k for k, v in queries.PRIORIDAD_LABEL.items()}
 _ANTIGUEDAD_CORTO = {"Menos de 7 días": "<7", "Entre 8 y 21 días": "8-21", "Más de 21 días": ">21"}
-
-
-def _celda_fallas(valor: int, patente: str, prioridad_label: str, bucket: str, clickeable: bool) -> str:
-    if valor and clickeable:
-        prioridad_key = _PRIORIDAD_LABEL_A_KEY[prioridad_label]
-        bucket_key = queries.ANTIGUEDAD_KEY[bucket]
-        query = f"falla_detalle={patente}|{prioridad_key}|{bucket_key}"
-        # No un <a href="?..."> a secas: eso hace que el navegador recargue
-        # la página ENTERA (no un rerun de Streamlit), y como la sesión
-        # iniciada vive en memoria (no en una cookie), la recarga la borra
-        # y manda de vuelta al login. pushState + popstate cambia la URL
-        # sin recargar -- Streamlit detecta el cambio de query params y
-        # hace un rerun normal, con la sesión intacta.
-        onclick = (
-            "event.preventDefault();"
-            f"const u=new URL(window.location);u.search='{query}';"
-            "window.history.pushState({}, '', u);"
-            "window.dispatchEvent(new PopStateEvent('popstate'));"
-        )
-        return f'<a href="#" onclick="{onclick}" title="Ver detalle">{valor}</a>'
-    return str(valor)
-
-
-def _tabla_fallas_html(tabla, en_vivo: bool) -> str:
-    """Tabla HTML propia para Fallas: Patente, Camión, y para cada prioridad
-    (Crítica/Alta/Media/Baja) 3 columnas de antigüedad (<7 / 8-21 / >21
-    días), más el Total. Los números > 0 son un link que abre el detalle en
-    un popup (st.dialog) -- solo si `en_vivo` (el histórico no guarda
-    detalle ticket a ticket).
-    """
-    cols_prioridad = list(queries.PRIORIDAD_LABEL.values())
-    cols_antiguedad = queries.ANTIGUEDAD_BUCKETS
-
-    filas_html = []
-    for _, row in tabla.iterrows():
-        celdas = "".join(
-            f"<td class='num'>{_celda_fallas(row[queries._col_cruzada(p, b)], row['patente'], p, b, en_vivo)}</td>"
-            for p in cols_prioridad for b in cols_antiguedad
-        )
-        filas_html.append(
-            "<tr>"
-            f"<td class='patente'>{row['patente']}</td>"
-            f"<td class='nombre'>{row['nombre_corto']}</td>"
-            f"{celdas}"
-            f"<td class='num total'>{row['Total']}</td>"
-            "</tr>"
-        )
-
-    head_prioridad = "".join(
-        f"<th colspan='3' style='color:{_COLOR_PRIORIDAD[p]}'>{p}</th>" for p in cols_prioridad
-    )
-    head_antiguedad = "".join(
-        f"<th>{_ANTIGUEDAD_CORTO[b]}</th>" for _ in cols_prioridad for b in cols_antiguedad
-    )
-
-    return f"""
-    <style>
-      .tabla-fallas {{
-        border-collapse: collapse; font-size: 12px; width: {FALLAS_WIDTH_PX}px;
-      }}
-      .tabla-fallas th, .tabla-fallas td {{
-        border: 1px solid rgba(128,128,128,0.35);
-        padding: 2px 3px;
-        text-align: center;
-        white-space: nowrap;
-        line-height: 1.2;
-        box-sizing: border-box;
-      }}
-      .tabla-fallas td.num {{ width: 21px; }}
-      .tabla-fallas td.total {{ font-weight: 600; }}
-      .tabla-fallas td.nombre, .tabla-fallas td.patente {{ text-align: left; font-weight: 500; }}
-      .tabla-fallas td.patente {{ opacity: 0.7; font-size: 11px; width: 46px; }}
-      .tabla-fallas td.nombre {{ width: 62px; }}
-      .tabla-fallas a {{ text-decoration: none; font-weight: 600; }}
-      .tabla-fallas thead th {{
-        background: rgba(128,128,128,0.12); font-size: 10px; font-weight: 700;
-      }}
-    </style>
-    <table class="tabla-fallas">
-      <thead>
-        <tr>
-          <th rowspan="2">Patente</th>
-          <th rowspan="2">Camión</th>
-          {head_prioridad}
-          <th rowspan="2">Total</th>
-        </tr>
-        <tr>{head_antiguedad}</tr>
-      </thead>
-      <tbody>
-        {"".join(filas_html)}
-      </tbody>
-    </table>
-    """
+_PRIORIDAD_ICONO = {"Crítica": "🔴", "Alta": "🟠", "Media": "🟡", "Baja": "🟢"}
+_COLOR_PRIORIDAD_BG = {
+    "Crítica": "rgba(211,47,47,0.14)",
+    "Alta": "rgba(245,124,0,0.14)",
+    "Media": "rgba(251,192,0,0.16)",
+    "Baja": "rgba(56,142,60,0.14)",
+}
 
 
 def render_fallas():
     tooltip = ("Cantidad de tickets de fallas ABIERTOS (no cerrados) por camión, según "
-               "prioridad. La semana actual se calcula en vivo; las semanas pasadas muestran "
-               "la foto guardada el lunes siguiente (menú Tickets de Datascope).")
+               "prioridad. La semana actual se calcula en vivo -- clic en un número para ver "
+               "el detalle. Las semanas pasadas muestran la foto guardada el lunes siguiente "
+               "(menú Tickets de Datascope) y no tienen detalle clickeable.")
 
     # Mismo st.markdown "vacío" que en Inspecciones, para que la fila del
     # título quede a la misma altura en ambos cuadrantes.
@@ -381,96 +267,59 @@ def render_fallas():
                 "(se guarda automáticamente el lunes siguiente a las 8:00 AM).")
         return
 
-    st.html(_tabla_fallas_html(tabla, en_vivo))
+    cols_prioridad = list(queries.PRIORIDAD_LABEL.values())
+    cols_antiguedad = queries.ANTIGUEDAD_BUCKETS
+    # Mismo formato que `queries._col_cruzada` -- son los nombres de columna
+    # que ya vienen armados en `tabla`.
+    cols_cruzadas = [f"{p}||{b}" for p in cols_prioridad for b in cols_antiguedad]
+
+    df_vista = tabla[["patente", "nombre_corto"] + cols_cruzadas + ["Total"]].reset_index(drop=True)
+
+    column_config = {
+        "patente": st.column_config.TextColumn("Patente", width="small"),
+        "nombre_corto": st.column_config.TextColumn("Camión", width="small"),
+        "Total": st.column_config.NumberColumn("Total", width="small"),
+    }
+    for p in cols_prioridad:
+        for b in cols_antiguedad:
+            column_config[f"{p}||{b}"] = st.column_config.NumberColumn(
+                f"{_PRIORIDAD_ICONO[p]} {_ANTIGUEDAD_CORTO[b]}", width="small", help=f"{p} · {b}",
+            )
+
+    def _colorear(df):
+        estilos = pd.DataFrame("", index=df.index, columns=df.columns)
+        for p in cols_prioridad:
+            for b in cols_antiguedad:
+                estilos[f"{p}||{b}"] = f"background-color:{_COLOR_PRIORIDAD_BG[p]}"
+        return estilos
+
+    # Clic en una celda de conteo abre el detalle -- selección nativa de
+    # st.dataframe (websocket, sin navegación de verdad), no un link HTML:
+    # eso último recargaba la página entera y cerraba la sesión (ver
+    # historial en el commit df9c48a). Solo clickeable en vivo -- el
+    # histórico no guarda detalle ticket a ticket.
+    evento = st.dataframe(
+        df_vista.style.apply(_colorear, axis=None),
+        hide_index=True, width="stretch",
+        column_config=column_config,
+        on_select="rerun" if en_vivo else "ignore",
+        selection_mode="single-cell",
+        key="tabla_fallas_sel",
+    )
+
+    if en_vivo and evento is not None:
+        celdas = evento["selection"]["cells"]
+        if celdas:
+            fila_idx, col_nombre = celdas[0]
+            if col_nombre in cols_cruzadas and df_vista.at[fila_idx, col_nombre]:
+                patente = df_vista.at[fila_idx, "patente"]
+                prioridad_label, bucket = col_nombre.split("||")
+                _dialog_detalle_fallas(patente, _PRIORIDAD_LABEL_A_KEY[prioridad_label], bucket)
 
     etiqueta_vivo = "en vivo" if en_vivo else "foto del lunes"
     st.caption(
         f"Total de tickets abiertos ({etiqueta_vivo}, todas las prioridades): **{tabla['Total'].sum()}**"
     )
-
-
-def _celda_mantenimiento(info: dict, patente: str, item_key: str) -> str:
-    color, fondo = _COLOR_ESTADO.get(info["estado"], _COLOR_ESTADO["sin_evento"])
-    query = f"mant_detalle={patente}|{item_key}"
-    # Mismo motivo que en `_celda_fallas`: pushState + popstate en vez de
-    # un <a href="?..."> a secas, para no recargar la página entera y
-    # perder la sesión iniciada.
-    onclick = (
-        "event.preventDefault();"
-        f"const u=new URL(window.location);u.search='{query}';"
-        "window.history.pushState({}, '', u);"
-        "window.dispatchEvent(new PopStateEvent('popstate'));"
-    )
-    return (
-        f"<td class='celda' style='background:{fondo}; color:{color};' "
-        f"title='Confianza de la regla: {planificacion.CONFIANZA_LABEL.get(info['confianza'], info['confianza'])}'>"
-        f"<a href=\"#\" onclick=\"{onclick}\">{info['texto']}</a></td>"
-    )
-
-
-def _tabla_mantenimiento_html(tabla, items_df) -> str:
-    """Tabla HTML propia para Mantenimiento Programado: Patente, Camión, y
-    2 grupos de columnas (Camión / Equipo), una por ítem del catálogo. Cada
-    celda es un link que abre el historial de ese ítem en ese camión.
-    """
-    camion_items = items_df[items_df["categoria"] == "camion"].to_dict("records")
-    equipo_items = items_df[items_df["categoria"] == "equipo"].to_dict("records")
-    todos_items = camion_items + equipo_items
-
-    filas_html = []
-    for _, row in tabla.iterrows():
-        celdas = "".join(
-            _celda_mantenimiento(row[it["item_key"]], row["patente"], it["item_key"])
-            for it in todos_items
-        )
-        filas_html.append(
-            "<tr>"
-            f"<td class='patente'>{row['patente']}</td>"
-            f"<td class='nombre'>{row['nombre_corto']}</td>"
-            f"{celdas}"
-            "</tr>"
-        )
-
-    head_camion = "".join(f"<th>{it['nombre']}</th>" for it in camion_items)
-    head_equipo = "".join(f"<th>{it['nombre']}</th>" for it in equipo_items)
-
-    return f"""
-    <div style="overflow-x:auto;">
-    <style>
-      .tabla-mant {{
-        border-collapse: collapse; font-size: 11px; white-space: nowrap;
-      }}
-      .tabla-mant th, .tabla-mant td {{
-        border: 1px solid rgba(128,128,128,0.35);
-        padding: 3px 5px;
-        text-align: center;
-        line-height: 1.2;
-        box-sizing: border-box;
-      }}
-      .tabla-mant td.nombre, .tabla-mant td.patente {{ text-align: left; font-weight: 500; }}
-      .tabla-mant td.patente {{ opacity: 0.7; font-size: 10px; }}
-      .tabla-mant a {{ text-decoration: none; color: inherit; font-weight: 600; }}
-      .tabla-mant thead th {{ font-size: 10px; font-weight: 700; }}
-      .tabla-mant thead tr:first-child th.grupo-camion {{ background: rgba(27,73,101,0.18); }}
-      .tabla-mant thead tr:first-child th.grupo-equipo {{ background: rgba(155,107,12,0.18); }}
-      .tabla-mant thead tr:last-child th {{ background: rgba(128,128,128,0.12); }}
-    </style>
-    <table class="tabla-mant">
-      <thead>
-        <tr>
-          <th rowspan="2">Patente</th>
-          <th rowspan="2">Camión</th>
-          <th class="grupo-camion" colspan="{len(camion_items)}">CAMIÓN (chasis)</th>
-          <th class="grupo-equipo" colspan="{len(equipo_items)}">EQUIPO</th>
-        </tr>
-        <tr>{head_camion}{head_equipo}</tr>
-      </thead>
-      <tbody>
-        {"".join(filas_html)}
-      </tbody>
-    </table>
-    </div>
-    """
 
 
 def render_mantenimiento_programado():
@@ -512,7 +361,57 @@ def render_mantenimiento_programado():
         st.info("No hay camiones seleccionados.")
         return
 
-    st.html(_tabla_mantenimiento_html(tabla, items_df))
+    tabla = tabla.reset_index(drop=True)
+    camion_items = items_df[items_df["categoria"] == "camion"].to_dict("records")
+    equipo_items = items_df[items_df["categoria"] == "equipo"].to_dict("records")
+    todos_items = camion_items + equipo_items
+    item_keys = [it["item_key"] for it in todos_items]
+
+    df_vista = pd.DataFrame({
+        "patente": tabla["patente"],
+        "nombre_corto": tabla["nombre_corto"],
+        **{key: tabla[key].apply(lambda info: info["texto"]) for key in item_keys},
+    })
+
+    column_config = {
+        "patente": st.column_config.TextColumn("Patente", width="small"),
+        "nombre_corto": st.column_config.TextColumn("Camión", width="small"),
+    }
+    # 🚛 = ítem del camión (chasis), ⚙️ = ítem del equipo -- reemplaza al
+    # agrupamiento de encabezados de la tabla HTML anterior (st.dataframe no
+    # soporta encabezados agrupados en varias filas).
+    for it in camion_items:
+        column_config[it["item_key"]] = st.column_config.TextColumn(f"🚛 {it['nombre']}", width="small")
+    for it in equipo_items:
+        column_config[it["item_key"]] = st.column_config.TextColumn(f"⚙️ {it['nombre']}", width="small")
+
+    def _colorear(df):
+        estilos = pd.DataFrame("", index=df.index, columns=df.columns)
+        for key in item_keys:
+            for fila_idx in df.index:
+                estado = tabla.at[fila_idx, key]["estado"]
+                color, fondo = _COLOR_ESTADO.get(estado, _COLOR_ESTADO["sin_evento"])
+                estilos.at[fila_idx, key] = f"background-color:{fondo}; color:{color};"
+        return estilos
+
+    # Clic en una celda abre el historial de ese ítem en ese camión --
+    # selección nativa de st.dataframe, mismo motivo que en `render_fallas`
+    # (evitar el <a href="?..."> que recargaba la página y cerraba sesión).
+    evento = st.dataframe(
+        df_vista.style.apply(_colorear, axis=None),
+        hide_index=True, width="stretch",
+        column_config=column_config,
+        on_select="rerun", selection_mode="single-cell",
+        key="tabla_mant_sel",
+    )
+
+    if evento is not None:
+        celdas = evento["selection"]["cells"]
+        if celdas:
+            fila_idx, col_nombre = celdas[0]
+            if col_nombre in item_keys:
+                patente = df_vista.at[fila_idx, "patente"]
+                _dialog_detalle_mantenimiento(patente, col_nombre)
 
     vencidos = sum(1 for _, row in tabla.iterrows() for it in items_df["item_key"] if row[it]["estado"] == "vencido")
     proximos = sum(1 for _, row in tabla.iterrows() for it in items_df["item_key"] if row[it]["estado"] == "proximo")
@@ -615,9 +514,6 @@ def render_inspecciones():
     else:
         st.caption("Sin checklists esperados en esta semana para los camiones seleccionados.")
 
-
-_revisar_query_params_fallas()
-_revisar_query_params_mantenimiento()
 
 GAP_ENTRE_CUADRANTES = 50
 col_inspecciones, col_fallas = st.columns(
