@@ -235,6 +235,7 @@ def _migrar_columnas_nuevas(engine):
         ("reglas_mantencion", "intervalo_km", "INTEGER"),
         ("reglas_mantencion", "intervalo_dias", "INTEGER"),
         ("reglas_mantencion", "origen", "VARCHAR(10)"),
+        ("usuarios", "ultima_vista_fallas", "TIMESTAMP"),
     ]
 
     def _nombre_completo(tabla):
@@ -475,6 +476,12 @@ usuarios = Table(
     Column("rol", String(20)),  # "supervisor" | "mecanico" | "admin"
     Column("activo", Boolean, default=True),
     Column("created_at", DateTime),
+    # Última vez que este usuario vio el Dashboard -- se usa para el aviso
+    # de "fallas nuevas desde tu última visita" (ver `queries.fallas_nuevas`
+    # y `marcar_vista_fallas`). NULL = nunca ha entrado, o cuenta creada
+    # antes de que este campo existiera (se migra sola, ver
+    # `_migrar_columnas_nuevas`).
+    Column("ultima_vista_fallas", DateTime, nullable=True),
 )
 
 # Un mecánico interno normalmente tiene `usuario_id` (puede entrar a "Mis
@@ -668,6 +675,25 @@ def actualizar_password(engine, usuario_id: int, password_hash: str):
     with engine.begin() as conn:
         conn.execute(
             usuarios.update().where(usuarios.c.id == usuario_id).values(password_hash=password_hash)
+        )
+
+
+def obtener_ultima_vista_fallas(engine, usuario_id: int):
+    """`None` si el usuario nunca ha entrado al Dashboard (o su cuenta es de
+    antes de que este campo existiera)."""
+    from sqlalchemy import select
+
+    with engine.connect() as conn:
+        fila = conn.execute(
+            select(usuarios.c.ultima_vista_fallas).where(usuarios.c.id == usuario_id)
+        ).first()
+    return fila[0] if fila else None
+
+
+def marcar_vista_fallas(engine, usuario_id: int, momento):
+    with engine.begin() as conn:
+        conn.execute(
+            usuarios.update().where(usuarios.c.id == usuario_id).values(ultima_vista_fallas=momento)
         )
 
 

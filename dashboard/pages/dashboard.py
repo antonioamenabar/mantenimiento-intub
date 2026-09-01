@@ -5,18 +5,32 @@ Esta página NO registra nada -- para crear y asignar trabajo, ver
 "Crear OT" (dentro de Software). Para completar una OT asignada, ver "Mis OTs".
 """
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import streamlit as st
 
-from src import auth, queries, planificacion
+from src import auth, db, queries, planificacion
 from src.bootstrap import get_engine
 
 engine = get_engine()
-auth.requerir_login(rol_requerido=auth.ROLES_OPERACION)
+usuario = auth.requerir_login(rol_requerido=auth.ROLES_OPERACION)
+
+# Aviso de "fallas nuevas desde tu última visita" -- se calcula una sola vez
+# por sesión (al entrar/recargar la página), no en cada rerun por clic,
+# para que no desaparezca ni se recalcule mientras navegas el resto del
+# Dashboard en la misma sesión.
+if "fallas_nuevas_aviso" not in st.session_state:
+    desde = db.obtener_ultima_vista_fallas(engine, usuario["id"])
+    st.session_state["fallas_nuevas_aviso"] = queries.fallas_nuevas_desde(engine, desde)
+    db.marcar_vista_fallas(engine, usuario["id"], datetime.now())
+
+_fallas_nuevas = st.session_state["fallas_nuevas_aviso"]
+if not _fallas_nuevas.empty:
+    _patentes_txt = ", ".join(sorted(_fallas_nuevas["patente"].dropna().unique()))
+    st.warning(f"🔧 **{len(_fallas_nuevas)} falla(s) nueva(s)** desde tu última visita: {_patentes_txt}")
 
 st.markdown(
     """

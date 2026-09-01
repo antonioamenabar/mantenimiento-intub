@@ -400,3 +400,20 @@ def detalle_fallas(engine, patente: str, prioridad_key: str, bucket: str) -> pd.
         axis=1,
     )
     return resultado.reset_index(drop=True)
+
+
+def fallas_nuevas_desde(engine, desde: datetime | None) -> pd.DataFrame:
+    """Tickets (no cerrados) creados después de `desde` -- para el aviso de
+    "fallas nuevas desde tu última visita" del Dashboard. `desde=None`
+    (usuario que nunca ha entrado) no muestra nada -- no tiene sentido
+    avisar de "todo lo que existe" la primera vez que alguien entra.
+    """
+    if desde is None:
+        return pd.DataFrame(columns=["patente", "priority", "creation_date"])
+    tickets_df = _load_tickets(engine)
+    if tickets_df.empty:
+        return tickets_df
+    fechas = tickets_df["creation_date"].apply(
+        lambda d: datetime.strptime(d, "%d/%m/%Y %H:%M") if d and pd.notna(d) else None
+    )
+    return tickets_df[fechas.apply(lambda f: f is not None and f > desde)].reset_index(drop=True)
