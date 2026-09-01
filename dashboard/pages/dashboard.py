@@ -218,8 +218,20 @@ def _celda_fallas(valor: int, patente: str, prioridad_label: str, bucket: str, c
     if valor and clickeable:
         prioridad_key = _PRIORIDAD_LABEL_A_KEY[prioridad_label]
         bucket_key = queries.ANTIGUEDAD_KEY[bucket]
-        href = f"?falla_detalle={patente}|{prioridad_key}|{bucket_key}"
-        return f'<a href="{href}" title="Ver detalle">{valor}</a>'
+        query = f"falla_detalle={patente}|{prioridad_key}|{bucket_key}"
+        # No un <a href="?..."> a secas: eso hace que el navegador recargue
+        # la página ENTERA (no un rerun de Streamlit), y como la sesión
+        # iniciada vive en memoria (no en una cookie), la recarga la borra
+        # y manda de vuelta al login. pushState + popstate cambia la URL
+        # sin recargar -- Streamlit detecta el cambio de query params y
+        # hace un rerun normal, con la sesión intacta.
+        onclick = (
+            "event.preventDefault();"
+            f"const u=new URL(window.location);u.search='{query}';"
+            "window.history.pushState({}, '', u);"
+            "window.dispatchEvent(new PopStateEvent('popstate'));"
+        )
+        return f'<a href="#" onclick="{onclick}" title="Ver detalle">{valor}</a>'
     return str(valor)
 
 
@@ -365,11 +377,20 @@ def render_fallas():
 
 def _celda_mantenimiento(info: dict, patente: str, item_key: str) -> str:
     color, fondo = _COLOR_ESTADO.get(info["estado"], _COLOR_ESTADO["sin_evento"])
-    href = f"?mant_detalle={patente}|{item_key}"
+    query = f"mant_detalle={patente}|{item_key}"
+    # Mismo motivo que en `_celda_fallas`: pushState + popstate en vez de
+    # un <a href="?..."> a secas, para no recargar la página entera y
+    # perder la sesión iniciada.
+    onclick = (
+        "event.preventDefault();"
+        f"const u=new URL(window.location);u.search='{query}';"
+        "window.history.pushState({}, '', u);"
+        "window.dispatchEvent(new PopStateEvent('popstate'));"
+    )
     return (
         f"<td class='celda' style='background:{fondo}; color:{color};' "
         f"title='Confianza de la regla: {planificacion.CONFIANZA_LABEL.get(info['confianza'], info['confianza'])}'>"
-        f"<a href='{href}'>{info['texto']}</a></td>"
+        f"<a href=\"#\" onclick=\"{onclick}\">{info['texto']}</a></td>"
     )
 
 
