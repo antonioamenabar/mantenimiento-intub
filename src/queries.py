@@ -2,7 +2,7 @@
 cumplimiento diario (inicio/fin de jornada) y semanal, por camión.
 """
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 from sqlalchemy import select
@@ -105,14 +105,23 @@ DIAS_SEMANA = ["Lun", "Mar", "Mié", "Jue", "Vie"]  # checklist diario solo apli
 # las 16 y el set completo de fotos de 3 de ellas (25 fotos en total) -- NINGUNA
 # corresponde al formulario de papel de Inicio de Faena: todas son fotos de
 # evidencia mecánica (correa, refrigerante, aceite, neumáticos, patente del
-# camión), no el checklist escaneado. Por eso, mientras no se confirme lo
-# contrario, los "Inicio" se muestran como "?" en vez de "✅".
+# camión), no el checklist escaneado. Por eso, para esas fechas (anteriores
+# a `FOTO_INICIO_VERIFICADO_DESDE`), los "Inicio" se muestran como "?" en
+# vez de "✅".
+#
+# Segunda revisión manual, 02-09-2026: el usuario reportó que RDPT96 y
+# VHSJ59 del lunes 31-08 SÍ tenían la planilla oficial cargada -- se
+# revisaron esas 2 más otras 8 fotos de "Inicio" (8 camiones en total,
+# días 31-08 y 01-09) y las 10 corresponden correctamente al formulario
+# "PR03 Inspección Inicio de Faena" (patente y fecha coincidentes). Cambió
+# el criterio del mecánico -- desde el 31-08-2026 el "Inicio" sí cuenta
+# como inspección real (✅), no como "?".
 #
 # OJO: esto es una revisión manual puntual, no una verificación automática.
-# Si se agregan más semanas de datos hay que repetir la revisión a mano, o
-# automatizarla integrando una llamada a un modelo de visión en la
+# Si el comportamiento vuelve a cambiar hay que repetir la revisión a
+# mano, o automatizarla integrando una llamada a un modelo de visión en la
 # sincronización (no está hecho todavía).
-FOTO_INICIO_NO_VERIFICABLE = True
+FOTO_INICIO_VERIFICADO_DESDE = date(2026, 8, 31)
 
 FOTO_EXCEPCIONES_MISMATCH = {
     # (patente, tipo_mantenimiento, "dd-mm-YYYY"): motivo (documentado, no usado en código)
@@ -202,8 +211,9 @@ def matriz_cumplimiento_diario(
             tiene_inicio, tiene_fin = not reg_inicio.empty, not reg_fin.empty
             fecha_str = dia.strftime("%d-%m-%Y")
             # El checklist SÍ se hizo (cuenta para el % de cumplimiento);
-            # "?" solo indica que la foto adjunta no se pudo verificar.
-            fila[col_inicio] = "?" if tiene_inicio and FOTO_INICIO_NO_VERIFICABLE else tiene_inicio
+            # "?" solo indica que la foto adjunta no se pudo verificar (ver
+            # `FOTO_INICIO_VERIFICADO_DESDE`).
+            fila[col_inicio] = "?" if tiene_inicio and dia < FOTO_INICIO_VERIFICADO_DESDE else tiene_inicio
             if tiene_fin and (camion["patente"], TIPO_FIN, fecha_str) in FOTO_EXCEPCIONES_MISMATCH:
                 fila[col_fin] = "?"
             else:
