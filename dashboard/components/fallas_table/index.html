@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<!--
+Componente Streamlit "de verdad" (declare_component) para la tabla de
+Fallas -- se necesitó esto, y no un <a href="?..."> dentro de st.html(),
+porque un link HTML hace que el navegador navegue de verdad (recarga
+completa de página), y como la sesión vive solo en memoria (sin cookie),
+esa recarga cierra al usuario. Este archivo corre en su propio iframe y
+habla con Streamlit por el protocolo oficial de componentes
+(postMessage: streamlit:componentReady / streamlit:setComponentValue /
+streamlit:setFrameHeight) -- clic en un número dispara un rerun normal
+por websocket, sin tocar la URL ni recargar nada.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    font-family: "Source Sans Pro", -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  .tabla-fallas { border-collapse: collapse; font-size: 12px; }
+  .tabla-fallas th, .tabla-fallas td {
+    border: 1px solid rgba(128,128,128,0.35);
+    padding: 2px 3px;
+    text-align: center;
+    white-space: nowrap;
+    line-height: 1.2;
+    box-sizing: border-box;
+  }
+  .tabla-fallas td.num { width: 21px; }
+  .tabla-fallas td.num.clickeable { cursor: pointer; font-weight: 600; }
+  .tabla-fallas td.num.clickeable:hover { filter: brightness(1.4); text-decoration: underline; }
+  .tabla-fallas td.total { font-weight: 600; }
+  .tabla-fallas td.nombre, .tabla-fallas td.patente { text-align: left; font-weight: 500; }
+  .tabla-fallas td.patente { opacity: 0.7; font-size: 11px; width: 46px; }
+  .tabla-fallas td.nombre { width: 62px; }
+  .tabla-fallas thead th { font-size: 10px; font-weight: 700; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+(function () {
+  "use strict";
+  var TYPE_READY = "streamlit:componentReady";
+  var TYPE_SET_VALUE = "streamlit:setComponentValue";
+  var TYPE_SET_HEIGHT = "streamlit:setFrameHeight";
+  var TYPE_RENDER = "streamlit:render";
+
+  function post(type, extra) {
+    var msg = { isStreamlitMessage: true, type: type };
+    for (var k in extra) msg[k] = extra[k];
+    window.parent.postMessage(msg, "*");
+  }
+
+  function setComponentValue(value) {
+    post(TYPE_SET_VALUE, { value: value, dataType: "json" });
+  }
+
+  function reportHeight() {
+    post(TYPE_SET_HEIGHT, { height: document.documentElement.scrollHeight });
+  }
+
+  function aplicarTema(theme) {
+    if (!theme) return;
+    document.body.style.background = theme.backgroundColor || "";
+    document.body.style.color = theme.textColor || "";
+  }
+
+  function render(args) {
+    var filas = args.filas || [];
+    var enVivo = !!args.en_vivo;
+    var prioridades = args.prioridades || [];
+    var buckets = args.buckets || [];
+    var colorPrioridad = args.color_prioridad || {};
+    var antiguedadCorta = args.antiguedad_corta || {};
+
+    var headPrioridad = "";
+    var headAntiguedad = "";
+    for (var pi = 0; pi < prioridades.length; pi++) {
+      var p = prioridades[pi];
+      headPrioridad += '<th colspan="' + buckets.length + '" style="color:' + (colorPrioridad[p] || "inherit") + '">' + p + "</th>";
+      for (var bi = 0; bi < buckets.length; bi++) {
+        headAntiguedad += "<th>" + (antiguedadCorta[buckets[bi]] || buckets[bi]) + "</th>";
+      }
+    }
+
+    var filasHtml = "";
+    for (var fi = 0; fi < filas.length; fi++) {
+      var fila = filas[fi];
+      var celdas = "";
+      for (pi = 0; pi < prioridades.length; pi++) {
+        p = prioridades[pi];
+        for (bi = 0; bi < buckets.length; bi++) {
+          var b = buckets[bi];
+          var valor = fila[p + "||" + b] || 0;
+          var clickeable = enVivo && valor > 0;
+          celdas += '<td class="num' + (clickeable ? " clickeable" : "") + '"' +
+            (clickeable ? ' data-patente="' + fila.patente + '" data-prioridad="' + p + '" data-bucket="' + b + '"' : "") +
+            ">" + valor + "</td>";
+        }
+      }
+      filasHtml += "<tr><td class='patente'>" + fila.patente + "</td><td class='nombre'>" + fila.nombre_corto +
+        "</td>" + celdas + "<td class='num total'>" + fila.Total + "</td></tr>";
+    }
+
+    document.getElementById("root").innerHTML =
+      '<table class="tabla-fallas"><thead>' +
+      "<tr><th rowspan='2'>Patente</th><th rowspan='2'>Camión</th>" + headPrioridad + "<th rowspan='2'>Total</th></tr>" +
+      "<tr>" + headAntiguedad + "</tr>" +
+      "</thead><tbody>" + filasHtml + "</tbody></table>";
+
+    var celdasClickeables = document.querySelectorAll("td[data-patente]");
+    for (var ci = 0; ci < celdasClickeables.length; ci++) {
+      celdasClickeables[ci].addEventListener("click", function () {
+        setComponentValue({
+          patente: this.getAttribute("data-patente"),
+          prioridad_label: this.getAttribute("data-prioridad"),
+          bucket: this.getAttribute("data-bucket"),
+          nonce: Date.now(),
+        });
+      });
+    }
+
+    reportHeight();
+    // Un segundo reporte tras el layout final (fuentes, etc.) por si el
+    // primer cálculo de altura quedó corto.
+    setTimeout(reportHeight, 60);
+  }
+
+  window.addEventListener("message", function (event) {
+    if (!event.data || event.data.type !== TYPE_RENDER) return;
+    aplicarTema(event.data.theme);
+    render(event.data.args);
+  });
+
+  post(TYPE_READY, { apiVersion: 1 });
+})();
+</script>
+</body>
+</html>

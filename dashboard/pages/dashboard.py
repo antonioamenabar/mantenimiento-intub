@@ -15,6 +15,7 @@ import streamlit as st
 
 from src import auth, db, queries, planificacion
 from src.bootstrap import get_engine
+from src.fallas_table_component import fallas_table as _fallas_table
 
 engine = get_engine()
 usuario = auth.requerir_login(rol_requerido=auth.ROLES_OPERACION)
@@ -51,14 +52,6 @@ TABLE_FONT_PX = 12
 # Ancho de la tabla de Fallas, pensado para quedar al lado de Inspecciones
 # (no debajo), con columnas al mínimo para que quepa todo sin scroll.
 FALLAS_WIDTH_PX = 460
-# Ancho "objetivo" de la TABLA de Fallas en sí (st.dataframe, 15 columnas:
-# Patente + Camión + 4 prioridades x 3 antigüedades + Total) -- distinto de
-# FALLAS_WIDTH_PX (que solo dimensiona los filtros de arriba). Es la
-# proporción que se le pide a st.columns, no un límite duro: la fila ya no
-# fuerza un ancho total fijo, se estira con la ventana real (ver el
-# st.columns de más abajo) -- probado a mano en ventanas de 1280 a 1920px
-# de ancho para que las 15 columnas se vean sin scroll interno.
-FALLAS_TABLE_WIDTH_PX = 1150
 
 # Colores por estado de vencimiento en la matriz de Mantenimiento Programado
 # (mismo criterio en ambos temas -- claro/oscuro -- porque son colores fijos
@@ -73,7 +66,7 @@ _COLOR_ESTADO = {
 
 
 @st.dialog("Detalle de tickets")
-def _dialog_detalle_fallas(patente: str, prioridad_key: str, bucket: str):
+def _dialog_detalle_fallas(patente: str, prioridad_key: str, bucket: str, marcador_clic: dict):
     nombre = queries.opciones_patentes(engine)
     nombre = dict(zip(nombre["patente"], nombre["nombre_corto"])).get(patente, patente)
     st.markdown(
@@ -85,11 +78,12 @@ def _dialog_detalle_fallas(patente: str, prioridad_key: str, bucket: str):
     else:
         st.dataframe(detalle, hide_index=True, width="stretch")
     if st.button("Cerrar"):
-        # Limpia la selección de la celda en la tabla (no query params -- el
-        # clic en la celda usa la selección nativa de st.dataframe, ver
-        # `render_fallas`) para que el popup no se vuelva a abrir solo en el
-        # próximo rerun.
-        st.session_state["tabla_fallas_sel"] = {"selection": {"rows": [], "columns": [], "cells": []}}
+        # El componente de la tabla de Fallas (ver render_fallas) devuelve
+        # el mismo valor mientras no se haga otro clic -- no hay forma de
+        # "resetearlo" desde Python. Se guarda el marcador del clic actual
+        # como "ya visto" para que el diálogo no se vuelva a abrir solo en
+        # el próximo rerun (mismo patrón que antes con el query param).
+        st.session_state["_fallas_click_dismissed"] = marcador_clic
         st.rerun()
 
 
@@ -205,12 +199,7 @@ def _tabla_html(tabla, semana_inicio) -> str:
 
 _PRIORIDAD_LABEL_A_KEY = {v: k for k, v in queries.PRIORIDAD_LABEL.items()}
 _ANTIGUEDAD_CORTO = {"Menos de 7 días": "<7", "Entre 8 y 21 días": "8-21", "Más de 21 días": ">21"}
-_COLOR_PRIORIDAD_BG = {
-    "Crítica": "rgba(211,47,47,0.14)",
-    "Alta": "rgba(245,124,0,0.14)",
-    "Media": "rgba(251,192,0,0.16)",
-    "Baja": "rgba(56,142,60,0.14)",
-}
+_COLOR_PRIORIDAD = {"Crítica": "#d32f2f", "Alta": "#f57c00", "Media": "#fbc02d", "Baja": "#388e3c"}
 
 
 def render_fallas():
@@ -280,63 +269,41 @@ def render_fallas():
     # que ya vienen armados en `tabla`.
     cols_cruzadas = [f"{p}||{b}" for p in cols_prioridad for b in cols_antiguedad]
 
-    df_vista = tabla[["patente", "nombre_corto"] + cols_cruzadas + ["Total"]].reset_index(drop=True)
+    # Filas como tipos nativos de Python (no numpy/int64 de pandas) -- el
+    # componente manda esto como JSON al iframe, y algunos valores llegan
+    # como numpy si vienen de la foto histórica (`_load_fallas_historico`,
+    # que reconstruye desde JSON guardado).
+    filas = []
+    for _, row in tabla.reset_index(drop=True).iterrows():
+        fila = {"patente": str(row["patente"]), "nombre_corto": str(row["nombre_corto"]), "Total": int(row["Total"])}
+        for col in cols_cruzadas:
+            fila[col] = int(row[col])
+        filas.append(fila)
 
-    # Anchos en pixeles (no "small"/"medium") -- son 15 columnas en total y
-    # necesitan quedar bien compactas para que quepan sin scroll interno en
-    # una ventana de escritorio normal (probado a mano de 1280 a 1920px).
-    # El emoji de prioridad se sacó del encabezado (no entraba junto con el
-    # texto de antigüedad en un ancho tan chico) -- la agrupación por
-    # prioridad la da el color de fondo de `_colorear`, y el detalle
-    # completo ("Crítica · Menos de 7 días") queda en el tooltip (`help`).
-    column_config = {
-        "patente": st.column_config.TextColumn("Patente", width=55),
-        "nombre_corto": st.column_config.TextColumn("Camión", width=68),
-        "Total": st.column_config.NumberColumn("Total", width=48),
-    }
-    for p in cols_prioridad:
-        for b in cols_antiguedad:
-            column_config[f"{p}||{b}"] = st.column_config.NumberColumn(
-                _ANTIGUEDAD_CORTO[b], width=31, help=f"{p} · {b}",
-            )
-
-    def _colorear(df):
-        estilos = pd.DataFrame("", index=df.index, columns=df.columns)
-        for p in cols_prioridad:
-            for b in cols_antiguedad:
-                estilos[f"{p}||{b}"] = f"background-color:{_COLOR_PRIORIDAD_BG[p]}"
-        return estilos
-
-    # Clic en una celda de conteo abre el detalle -- selección nativa de
-    # st.dataframe (websocket, sin navegación de verdad), no un link HTML:
-    # eso último recargaba la página entera y cerraba la sesión (ver
-    # historial en el commit df9c48a). Solo clickeable en vivo -- el
-    # histórico no guarda detalle ticket a ticket.
-    # height="content" (no un número fijo en pixeles): un alto fijo calculado
-    # a mano quedó descuadrado apenas Streamlit Cloud resolvió una versión de
-    # Streamlit levemente distinta a la de desarrollo (requirements.txt no
-    # fija la versión exacta) y recortó la última fila -- "content" siempre
-    # se ajusta solo a las filas reales, sin recortar, aunque quede a un par
-    # de pixeles de la altura exacta de Inspecciones (imperceptible).
-    evento = st.dataframe(
-        df_vista.style.apply(_colorear, axis=None),
-        hide_index=True, width="stretch",
-        column_config=column_config,
-        on_select="rerun" if en_vivo else "ignore",
-        selection_mode="single-cell",
-        key="tabla_fallas_sel",
-        row_height=19,
-        height="content",
+    # Tabla HTML "de verdad" en su propio componente (ver
+    # dashboard/components/fallas_table/index.html) -- no un <a href="?...">
+    # dentro de st.html(): eso hace que el navegador navegue de verdad
+    # (recarga completa) y, como la sesión vive solo en memoria (sin
+    # cookie), esa recarga cierra al usuario (ver historial en el commit
+    # df9c48a). El componente habla con Streamlit por su protocolo oficial
+    # (postMessage), así que un clic dispara un rerun normal por websocket.
+    # Solo clickeable en vivo -- el histórico no guarda detalle ticket a
+    # ticket.
+    resultado = _fallas_table(
+        filas=filas, en_vivo=en_vivo, prioridades=cols_prioridad, buckets=cols_antiguedad,
+        color_prioridad=_COLOR_PRIORIDAD, antiguedad_corta=_ANTIGUEDAD_CORTO,
+        key="fallas_table_component", default=None,
     )
 
-    if en_vivo and evento is not None:
-        celdas = evento["selection"]["cells"]
-        if celdas:
-            fila_idx, col_nombre = celdas[0]
-            if col_nombre in cols_cruzadas and df_vista.at[fila_idx, col_nombre]:
-                patente = df_vista.at[fila_idx, "patente"]
-                prioridad_label, bucket = col_nombre.split("||")
-                _dialog_detalle_fallas(patente, _PRIORIDAD_LABEL_A_KEY[prioridad_label], bucket)
+    # El componente devuelve el mismo valor mientras no se haga otro clic
+    # (no se puede "resetear" desde Python) -- se compara contra el último
+    # ya descartado (ver el botón "Cerrar" del diálogo) para no reabrirlo
+    # solo porque la página volvió a correr por otro motivo.
+    if resultado and resultado != st.session_state.get("_fallas_click_dismissed"):
+        _dialog_detalle_fallas(
+            resultado["patente"], _PRIORIDAD_LABEL_A_KEY[resultado["prioridad_label"]], resultado["bucket"],
+            resultado,
+        )
 
     etiqueta_vivo = "en vivo" if en_vivo else "foto del lunes"
     st.caption(
@@ -538,12 +505,14 @@ def render_inspecciones():
 
 
 GAP_ENTRE_CUADRANTES = 50
-# Sin `width=` fijo -- width="stretch" es el default de st.columns, así la
-# fila usa el ancho real de la ventana del usuario (antes quedaba topada a
-# TABLE_WIDTH_PX+FALLAS_WIDTH_PX+gap sin importar cuánta pantalla hubiera
-# de sobra, y la tabla de Fallas no tenía dónde mostrar sus 15 columnas).
+# Ancho total fijo (no "stretch"): la tabla de Fallas volvió a ser HTML
+# compacta de ancho fijo (ver `_fallas_table`), igual que Inspecciones --
+# un ancho de fila fijo es lo que garantiza que las dos queden alineadas y
+# a la altura que les corresponde, sin importar cuánta pantalla de sobra
+# haya.
 col_inspecciones, col_fallas = st.columns(
-    [TABLE_WIDTH_PX, FALLAS_TABLE_WIDTH_PX], gap=GAP_ENTRE_CUADRANTES,
+    [TABLE_WIDTH_PX, FALLAS_WIDTH_PX], gap=GAP_ENTRE_CUADRANTES,
+    width=TABLE_WIDTH_PX + FALLAS_WIDTH_PX + GAP_ENTRE_CUADRANTES,
 )
 with col_inspecciones:
     render_inspecciones()
