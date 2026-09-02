@@ -206,6 +206,14 @@ def matriz_cumplimiento_diario(
                 fila[foto_fin] = None
                 continue
             del_dia = del_camion[del_camion["fecha_inicio_dt"].apply(lambda d: d.date() == dia)]
+            # Ordenado por más reciente primero: si un camión mandó MÁS DE
+            # UN reporte del mismo checklist el mismo día (caso real:
+            # TWRD42 el 31-08-2026 mandó dos -- el primero con fotos del
+            # camión, sin la planilla, y uno posterior corrigiendo con la
+            # foto de la planilla real), el `.iloc[0]` de más abajo debe
+            # tomar el ÚLTIMO enviado, no el primero que aparezca en la
+            # consulta -- se asume que un reenvío corrige al anterior.
+            del_dia = del_dia.sort_values("fecha_inicio_dt", ascending=False)
             reg_inicio = del_dia[del_dia["tipo_mantenimiento"] == TIPO_INICIO]
             reg_fin = del_dia[del_dia["tipo_mantenimiento"] == TIPO_FIN]
             tiene_inicio, tiene_fin = not reg_inicio.empty, not reg_fin.empty
