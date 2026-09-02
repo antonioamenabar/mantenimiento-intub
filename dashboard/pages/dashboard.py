@@ -51,6 +51,14 @@ TABLE_FONT_PX = 12
 # Ancho de la tabla de Fallas, pensado para quedar al lado de Inspecciones
 # (no debajo), con columnas al mínimo para que quepa todo sin scroll.
 FALLAS_WIDTH_PX = 460
+# Ancho "objetivo" de la TABLA de Fallas en sí (st.dataframe, 15 columnas:
+# Patente + Camión + 4 prioridades x 3 antigüedades + Total) -- distinto de
+# FALLAS_WIDTH_PX (que solo dimensiona los filtros de arriba). Es la
+# proporción que se le pide a st.columns, no un límite duro: la fila ya no
+# fuerza un ancho total fijo, se estira con la ventana real (ver el
+# st.columns de más abajo) -- probado a mano en ventanas de 1280 a 1920px
+# de ancho para que las 15 columnas se vean sin scroll interno.
+FALLAS_TABLE_WIDTH_PX = 1150
 
 # Colores por estado de vencimiento en la matriz de Mantenimiento Programado
 # (mismo criterio en ambos temas -- claro/oscuro -- porque son colores fijos
@@ -197,7 +205,6 @@ def _tabla_html(tabla, semana_inicio) -> str:
 
 _PRIORIDAD_LABEL_A_KEY = {v: k for k, v in queries.PRIORIDAD_LABEL.items()}
 _ANTIGUEDAD_CORTO = {"Menos de 7 días": "<7", "Entre 8 y 21 días": "8-21", "Más de 21 días": ">21"}
-_PRIORIDAD_ICONO = {"Crítica": "🔴", "Alta": "🟠", "Media": "🟡", "Baja": "🟢"}
 _COLOR_PRIORIDAD_BG = {
     "Crítica": "rgba(211,47,47,0.14)",
     "Alta": "rgba(245,124,0,0.14)",
@@ -275,15 +282,22 @@ def render_fallas():
 
     df_vista = tabla[["patente", "nombre_corto"] + cols_cruzadas + ["Total"]].reset_index(drop=True)
 
+    # Anchos en pixeles (no "small"/"medium") -- son 15 columnas en total y
+    # necesitan quedar bien compactas para que quepan sin scroll interno en
+    # una ventana de escritorio normal (probado a mano de 1280 a 1920px).
+    # El emoji de prioridad se sacó del encabezado (no entraba junto con el
+    # texto de antigüedad en un ancho tan chico) -- la agrupación por
+    # prioridad la da el color de fondo de `_colorear`, y el detalle
+    # completo ("Crítica · Menos de 7 días") queda en el tooltip (`help`).
     column_config = {
-        "patente": st.column_config.TextColumn("Patente", width="small"),
-        "nombre_corto": st.column_config.TextColumn("Camión", width="small"),
-        "Total": st.column_config.NumberColumn("Total", width="small"),
+        "patente": st.column_config.TextColumn("Patente", width=55),
+        "nombre_corto": st.column_config.TextColumn("Camión", width=68),
+        "Total": st.column_config.NumberColumn("Total", width=48),
     }
     for p in cols_prioridad:
         for b in cols_antiguedad:
             column_config[f"{p}||{b}"] = st.column_config.NumberColumn(
-                f"{_PRIORIDAD_ICONO[p]} {_ANTIGUEDAD_CORTO[b]}", width="small", help=f"{p} · {b}",
+                _ANTIGUEDAD_CORTO[b], width=31, help=f"{p} · {b}",
             )
 
     def _colorear(df):
@@ -298,10 +312,12 @@ def render_fallas():
     # eso último recargaba la página entera y cerraba la sesión (ver
     # historial en el commit df9c48a). Solo clickeable en vivo -- el
     # histórico no guarda detalle ticket a ticket.
-    # row_height=19 y el +40 del header están ajustados a mano para que la
-    # altura calce con la tabla HTML de Inspecciones (misma cantidad de
-    # filas por defecto) -- st.dataframe no tiene una opción de "calzar con
-    # otro elemento", así que se mide y se fija en pixeles.
+    # height="content" (no un número fijo en pixeles): un alto fijo calculado
+    # a mano quedó descuadrado apenas Streamlit Cloud resolvió una versión de
+    # Streamlit levemente distinta a la de desarrollo (requirements.txt no
+    # fija la versión exacta) y recortó la última fila -- "content" siempre
+    # se ajusta solo a las filas reales, sin recortar, aunque quede a un par
+    # de pixeles de la altura exacta de Inspecciones (imperceptible).
     evento = st.dataframe(
         df_vista.style.apply(_colorear, axis=None),
         hide_index=True, width="stretch",
@@ -310,7 +326,7 @@ def render_fallas():
         selection_mode="single-cell",
         key="tabla_fallas_sel",
         row_height=19,
-        height=40 + 19 * len(df_vista),
+        height="content",
     )
 
     if en_vivo and evento is not None:
@@ -522,9 +538,12 @@ def render_inspecciones():
 
 
 GAP_ENTRE_CUADRANTES = 50
+# Sin `width=` fijo -- width="stretch" es el default de st.columns, así la
+# fila usa el ancho real de la ventana del usuario (antes quedaba topada a
+# TABLE_WIDTH_PX+FALLAS_WIDTH_PX+gap sin importar cuánta pantalla hubiera
+# de sobra, y la tabla de Fallas no tenía dónde mostrar sus 15 columnas).
 col_inspecciones, col_fallas = st.columns(
-    [TABLE_WIDTH_PX, FALLAS_WIDTH_PX], gap=GAP_ENTRE_CUADRANTES,
-    width=TABLE_WIDTH_PX + FALLAS_WIDTH_PX + GAP_ENTRE_CUADRANTES,
+    [TABLE_WIDTH_PX, FALLAS_TABLE_WIDTH_PX], gap=GAP_ENTRE_CUADRANTES,
 )
 with col_inspecciones:
     render_inspecciones()
