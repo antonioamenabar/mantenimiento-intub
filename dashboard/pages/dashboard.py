@@ -298,6 +298,10 @@ def render_fallas():
     # eso último recargaba la página entera y cerraba la sesión (ver
     # historial en el commit df9c48a). Solo clickeable en vivo -- el
     # histórico no guarda detalle ticket a ticket.
+    # row_height=19 y el +40 del header están ajustados a mano para que la
+    # altura calce con la tabla HTML de Inspecciones (misma cantidad de
+    # filas por defecto) -- st.dataframe no tiene una opción de "calzar con
+    # otro elemento", así que se mide y se fija en pixeles.
     evento = st.dataframe(
         df_vista.style.apply(_colorear, axis=None),
         hide_index=True, width="stretch",
@@ -305,6 +309,8 @@ def render_fallas():
         on_select="rerun" if en_vivo else "ignore",
         selection_mode="single-cell",
         key="tabla_fallas_sel",
+        row_height=19,
+        height=40 + 19 * len(df_vista),
     )
 
     if en_vivo and evento is not None:
